@@ -16,6 +16,7 @@
 
 import logging
 import yaml
+import os
 
 from .. import (normalise_target_type_name, TARGET)
 from ...coresight.coresight_target import CoreSightTarget
@@ -51,6 +52,19 @@ class CbuildRun:
             return self._data['cbuild-run']['device'].split('::')[1]
         else:
             return ''
+
+    @property
+    def device_pack(self) -> list:
+        """@brief Device Pack (DFP).
+        @return Value of 'device-pack'.
+        """
+        if self._valid and ('device-pack' in self._data['cbuild-run']):
+            vendor, _pack = self._data['cbuild-run']['device-pack'].split('::', 1)
+            name, version = _pack.split('@', 1)
+            pack = f"${{CMSIS_PACK_ROOT}}/{vendor}/{name}/{version}"
+            return [os.path.expandvars(pack)]
+        else:
+            return []
 
     def populate_target(self, target: str) -> None:
         """@brief Generates and populates the target defined by the .cbuild-run.yml file.

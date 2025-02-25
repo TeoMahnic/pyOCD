@@ -1157,20 +1157,22 @@ class CmsisPackDevice:
                             f"{self.pack_description.pack_name} DFP ({self.part_number}): <{accessport.tag}> "
                             f"'__dp' attribute is invalid ({ap_dp})")
 
+                # Get the __apid attribute.
+                apid = self._get_int_attribute(accessport, '__apid')
+
                 # APv1
                 if accessport.tag == 'accessportV1':
                     index = self._get_int_attribute(accessport, 'index')
-                    ap_address = APv1Address(index, ap_dp)
+                    ap_address = APv1Address(index, ap_dp, apid)
                 # APv2
                 elif accessport.tag == 'accessportV2':
                     address = self._get_int_attribute(accessport, 'address')
-                    ap_address = APv2Address(address, ap_dp)
+                    ap_address = APv2Address(address, ap_dp, apid)
                 else:
                     raise exceptions.InternalError(
                             f"unexpected element <{accessport.tag}> in access ports list")
 
-                # Save this AP address and the specified __apid.
-                apid = self._get_int_attribute(accessport, '__apid')
+                # Save this AP address.
                 self._apids[apid] = ap_address
             except MalformedCmsisPackError as err:
                 LOG.warning("%s", err)

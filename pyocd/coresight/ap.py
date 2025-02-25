@@ -206,10 +206,11 @@ class APAddressBase:
     address format.
     """
 
-    def __init__(self, address: int, dp: int = 0) -> None:
+    def __init__(self, address: int, dp: int = 0, apid: int = 0) -> None:
         """@brief Constructor accepting the nominal address."""
         self._nominal_address = address
         self._dp = dp
+        self._apid = apid
 
     @property
     def ap_version(self) -> APVersion:
@@ -240,6 +241,11 @@ class APAddressBase:
     def dp_index(self) -> int:
         """@brief Index of the DP to which this AP is attached."""
         return self._dp
+
+    @property
+    def apid(self) -> int:
+        """@brief Unique AP identifier."""
+        return self._apid
 
     def __hash__(self) -> int:
         return hash(self.nominal_address | (self._dp << 64))

@@ -329,6 +329,12 @@ class CbuildRun:
         return {}
 
     @property
+    def debugger(self) -> dict:
+        if self._valid:
+            return self._data['cbuild-run'].get('debugger', {})
+        return {}
+
+    @property
     def system_resources(self) -> dict:
         """@brief System Resources
         @return 'system-resources' section of cbuild-run.
@@ -523,19 +529,27 @@ class CbuildRun:
 
 
 class CbuildRunSequences:
-    def __init__(self, yml_vars, yml_sequences) -> None:
-        self._debug_vars = yml_vars
-        self._debug_sequences = yml_sequences
+    def __init__(self, device: CbuildRun) -> None:
+        self._cbuild_vars = device.debug_vars
+        self._cbuild_debugger = device.debugger
+        self._cbuild_sequences = device.debug_sequences
 
         self._debugvars: Optional[Block] = None
+        self._debugvars_conf: Optional[Block] = None
         self._sequences: Set[DebugSequence] = set()
         self._control_nodes = {'if', 'while'}
 
     @property
     def variables(self) -> Optional[Block]:
-        if (self._debugvars is None) and (self._debug_vars.get('vars') is not None):
-            self._debugvars = Block(self._debug_vars['vars'], info='debugvars')
+        if (self._debugvars is None) and (self._cbuild_vars.get('vars') is not None):
+            self._debugvars = Block(self._cbuild_vars['vars'], info='debugvars')
         return self._debugvars
+
+    @property
+    def dbgconf_variables(self) -> Optional[Block]:
+        if self._debugvars_conf is None:
+            self._dbgconf_variables()
+        return self._debugvars_conf
 
     @property
     def sequences(self) -> Set[DebugSequence]:
@@ -543,8 +557,19 @@ class CbuildRunSequences:
             self._build_sequences()
         return self._sequences
 
+    def _dbgconf_variables(self) -> Optional[Block]:
+        #TODO how to select correct debugger?
+        # Currently first debugger is selected as active
+        for debugger in self._cbuild_debugger:
+            dbgconf_file = debugger.get('dbgconf', None)
+            if dbgconf_file is not None:
+                with open(dbgconf_file) as f:
+                    dbgconf = f.read()
+                    self._debugvars_conf = Block(dbgconf, info='dbgconf')
+                break
+
     def _build_sequences(self) -> None:
-        for elem in self._debug_sequences:
+        for elem in self._cbuild_sequences:
             name = elem.get('name', None)
             if name is None:
                 LOG.warning("invalid debug sequence; missing name")
@@ -597,8 +622,8 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         self._target = target
         self._session = target.session
         self._device = device
-        self._cbuild_run_sequences = CbuildRunSequences(device.debug_vars, device.debug_sequences)
-        self._sequences: Set[DebugSequence] = self._cbuild_run_sequences.sequences
+        self._cbuild_sequences = CbuildRunSequences(device)
+        self._sequences: Set[DebugSequence] = self._cbuild_sequences.sequences
         self._debugvars: Optional[Scope] = None
         self._functions = DebugSequenceCommonFunctions()
 
@@ -614,11 +639,18 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         if self._debugvars is not None:
             return self._debugvars
 
+        # Populate default debugvars with values from *.cbuild-run.yml file.
         self._debugvars = Scope(name='debugvars')
-        debugvars_block = self._cbuild_run_sequences.variables
+        debugvars_block = self._cbuild_sequences.variables
         if debugvars_block is not None:
             with context.push(debugvars_block, self._debugvars):
                 debugvars_block.execute(context)
+
+        # Override default debugvars with values from *.dbgconf file.
+        debugvars_conf_block = self._cbuild_sequences.dbgconf_variables
+        if debugvars_conf_block is not None:
+            with context.push(debugvars_conf_block, self._debugvars):
+                debugvars_conf_block.execute(context)
 
         # Make all vars read-only.
         self._debugvars.freeze()

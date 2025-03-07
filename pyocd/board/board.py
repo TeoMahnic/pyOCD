@@ -110,8 +110,7 @@ class Board(GraphNode):
 
         # Create target from cbuild-run information.
         if cbuild_run and cbuild_run.target:
-            # cbuild_run.populate_target(target)
-            pack_target.PackTargets.populate_targets_from_pack(cbuild_run.device_pack)
+            cbuild_run.populate_target(target)
 
         # Create targets from provided CMSIS pack.
         if session.options['pack'] is not None:

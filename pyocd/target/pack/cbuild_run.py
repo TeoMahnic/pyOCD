@@ -17,15 +17,45 @@
 import logging
 import yaml
 import os
+import io
+from pathlib import Path
 
+from dataclasses import dataclass
 from typing import (cast, Optional, Set, Dict, List, Tuple, IO)
 from .flash_algo import PackFlashAlgo
 from .. import (normalise_target_type_name, TARGET)
+from .reset_sequence_maps import (RESET_SEQUENCE_TO_TYPE_MAP, RESET_TYPE_TO_SEQUENCE_MAP)
+from ...coresight.cortex_m import CortexM
 from ...coresight.coresight_target import CoreSightTarget
+from ...coresight.ap import (APAddressBase, APv1Address, APv2Address)
+from ...core import exceptions
+from ...core.target import Target
 from ...core.session import Session
+from ...core.core_target import CoreTarget
 from ...core.memory_map import (MemoryMap, MemoryType, MEMORY_TYPE_CLASS_MAP)
+from ...utility.sequencer import CallSequence
+from ...debug.svd.loader import SVDFile
 
 LOG = logging.getLogger(__name__)
+
+@dataclass
+class ProcessorInfo:
+    """@brief Descriptor for a processor defined in a DFP."""
+    ## The Pname attribute, or Dcore if not Pname was provided.
+    name: str = "unknown"
+    ## PE unit number within an MPCore. For single cores this will be 0.
+    unit: int = 0
+    ## Total number of cores in an MPCore.
+    total_units: int = 1
+    ## Address of AP through which the PE can be accessed.
+    ap_address: APAddressBase = APv1Address(-1)
+    ## Base address of the PE's memory mapped debug registers. Not used and 0 for M-profile.
+    address: int = 0
+    ## SVD file path relative to the pack.
+    svd_path: Optional[str] = None
+    ## Default reset sequence name.
+    default_reset_sequence: str = "ResetSystem"
+
 
 class CbuildRunTargetMethods:
     """@brief Namespace for Cbuild-Run target generation utilities
@@ -170,6 +200,11 @@ class CbuildRun:
         self._vars = None
         self._sequences = None
         self._memory_map: Optional[MemoryMap] = None
+        self._valid_dps: List[int] = []
+        self._apids: Dict[int, APAddressBase] = {}
+        self._built_apid_map: bool = False
+        self._processors_map: Dict[str, ProcessorInfo] = {}
+        self._processors_ap_map: Dict[APAddressBase, ProcessorInfo] = {}
 
         self._valid = False
         try:
@@ -191,6 +226,10 @@ class CbuildRun:
             return ''
 
     @property
+    def part_number(self) -> str:
+        return self.target
+
+    @property
     def vendor(self) -> str:
         """@brief Target Vendor
         @return Value of 'device' without Target.
@@ -201,25 +240,96 @@ class CbuildRun:
             return ''
 
     @property
+    def families(self) -> List[str]:
+        return ['']
+
+    @property
     def memory_map(self) -> MemoryMap:
         if self._memory_map is None:
             self._build_memory_map()
         return self._memory_map
 
     @property
+    def svd(self) -> Optional[IO[bytes]]:
+        #TODO handle multicore
+        try:
+            for item in self.system_descriptions:
+                if item['type'] == 'svd':
+                    svd_path = Path(os.path.expandvars(item['file']))
+                    return io.BytesIO(svd_path.read_bytes())
+        except (KeyError, IndexError):
+            return None
+
+    @property
+    def debug_sequences(self) -> dict:
+        if self._valid and ('debug-sequences' in self._data['cbuild-run']):
+            if self._sequences is None:
+                self._sequences = self._data['cbuild-run'].get('debug-sequences', {})
+            return self._sequences
+        return {}
+
+    @property
+    def debug_vars(self) -> dict:
+        if self._valid and ('debug-vars' in self._data['cbuild-run']):
+            if self._vars is None:
+                self._vars = self._data['cbuild-run'].get('debug-vars', {})
+            return self._vars
+        return {}
+
+    @property
+    def valid_dps(self) -> List[int]:
+        if not self._valid_dps:
+            self._build_valid_dps()
+        return self._valid_dps
+
+    @property
+    def uses_apid(self) -> bool:
+        return len(self.apid_map) > 0
+
+    @property
+    def apid_map(self) -> Dict[int, APAddressBase]:
+        if not self._built_apid_map:
+            self._build_aps_map()
+        return self._apids
+
+    @property
+    def processors_map(self) -> Dict[str, ProcessorInfo]:
+        if not self._processors_map:
+            self._build_aps_map()
+        return self._processors_map
+
+    @property
+    def processors_ap_map(self) -> Dict[APAddressBase, ProcessorInfo]:
+        if not self._processors_ap_map:
+            self._processors_ap_map = {
+                proc.ap_address: proc
+                for proc in self.processors_map.values()
+            }
+        return self._processors_ap_map
+
+    @property
     def programming(self) -> dict:
+        """@brief Programming
+        @return 'programming' section of cbuild-run.
+        """
         if self._valid:
             return self._data['cbuild-run'].get('programming', {})
         return {}
 
     @property
     def system_resources(self) -> dict:
+        """@brief System Resources
+        @return 'system-resources' section of cbuild-run.
+        """
         if self._valid:
             return self._data['cbuild-run'].get('system-resources', {})
         return {}
 
     @property
     def system_descriptions(self) -> dict:
+        """@brief System Descriptions
+        @return 'system-descriptions' section of cbuild-run.
+        """
         if self._valid:
             return self._data['cbuild-run'].get('system-descriptions', {})
         return {}
@@ -330,3 +440,71 @@ class CbuildRun:
             regions.append(MEMORY_TYPE_CLASS_MAP[type](**attrs))
 
         self._memory_map = MemoryMap(regions)
+
+    def _build_valid_dps(self) -> None:
+        if 'debugger' in self._data['cbuild-run']:
+            for debugger in self._data['cbuild-run']['debugger']:
+                dp = debugger.get('dp', None)
+                if dp is not None:
+                    self._valid_dps.append(dp)
+        if not self._valid_dps:
+            # Use default __dp of 0.
+            self._valid_dps.append(0)
+
+    def _build_aps_map(self) -> None:
+        self._built_apid_map = True
+
+        if 'processor' in self._data['cbuild-run']:
+            for processor in self._data['cbuild-run']['processor']:
+                if 'pname' in processor:
+                    pname = processor['pname']
+                else:
+                    pname = processor['core']
+
+                address = 0
+                if 'accessports' in processor:
+                    for accessport in processor['accessports']:
+                        ap_dp = accessport.get('dp', 0)
+                        if ap_dp not in self.valid_dps:
+                            LOG.warning(f"dp attribute is invalid ({ap_dp})")
+                        apid = accessport['apid']
+
+                        #APv2
+                        if 'address' in accessport:
+                            address = accessport['address']
+                            ap_address = APv2Address(accessport['address'], ap_dp, apid)
+                        elif 'index' in accessport:
+                            ap_address = APv1Address(accessport['index'], ap_dp, apid)
+                        else:
+                            raise exceptions.InternalError("Invalid accessport")
+
+                        # Save this AP address.
+                        self._apids[apid] = ap_address
+                else:
+                    # Otherwise define a default AP #0.
+                    ap_address = APv1Address(0)
+
+                svd_path = None
+                for item in self.system_descriptions:
+                    if item['type'] == 'svd':
+                        if ('pname' in item) and pname != item['pname']:
+                            continue
+                        svd_path = os.path.expandvars(item['file'])
+                        break
+
+                reset_sequence = processor.get('resetsequence', 'ResetSystem')
+                self._processors_map[pname] = ProcessorInfo(name=pname,
+                                                          unit=processor.get('punit', 0),
+                                                          total_units=processor.get('punits', 1),
+                                                          ap_address=ap_address,
+                                                          address=address,
+                                                          svd_path=svd_path,
+                                                          default_reset_sequence=reset_sequence)
+
+        if not self._processors_map:
+            LOG.warning("No 'processor' node was found")
+            # Add dummy processor.
+            pname = 'unknown'
+            ap_address = APv1Address(0)
+            self._processors_map[pname] = ProcessorInfo(name=pname,
+                                                       ap_address=ap_address)

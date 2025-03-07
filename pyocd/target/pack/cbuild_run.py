@@ -34,7 +34,19 @@ from ...core.session import Session
 from ...core.core_target import CoreTarget
 from ...core.memory_map import (MemoryMap, MemoryType, MEMORY_TYPE_CLASS_MAP)
 from ...utility.sequencer import CallSequence
+from ...probe.debug_probe import DebugProbe
+from ...debug.sequences.scope import Scope
+from ...debug.sequences.delegates import DebugSequenceDelegate
+from ...debug.sequences.functions import DebugSequenceCommonFunctions
 from ...debug.svd.loader import SVDFile
+from ...debug.sequences.sequences import (
+    Block,
+    DebugSequence,
+    DebugSequenceNode,
+    IfControl,
+    WhileControl,
+    DebugSequenceExecutionContext
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -508,3 +520,237 @@ class CbuildRun:
             ap_address = APv1Address(0)
             self._processors_map[pname] = ProcessorInfo(name=pname,
                                                        ap_address=ap_address)
+
+
+class CbuildRunSequences:
+    def __init__(self, yml_vars, yml_sequences) -> None:
+        self._debug_vars = yml_vars
+        self._debug_sequences = yml_sequences
+
+        self._debugvars: Optional[Block] = None
+        self._sequences: Set[DebugSequence] = set()
+        self._control_nodes = {'if', 'while'}
+
+    @property
+    def variables(self) -> Optional[Block]:
+        if (self._debugvars is None) and (self._debug_vars.get('vars') is not None):
+            self._debugvars = Block(self._debug_vars['vars'], info='debugvars')
+        return self._debugvars
+
+    @property
+    def sequences(self) -> Set[DebugSequence]:
+        if self._sequences == set():
+            self._build_sequences()
+        return self._sequences
+
+    def _build_sequences(self) -> None:
+        for elem in self._debug_sequences:
+            name = elem.get('name', None)
+            if name is None:
+                LOG.warning("invalid debug sequence; missing name")
+                continue
+
+            pname = elem.get('pname', None)
+            info = elem.get('info', None)
+            sequence = DebugSequence(name, True, pname, info)
+
+            if 'blocks' in elem:
+                for child in elem['blocks']:
+                    self._build_sequence_node(sequence, child)
+            self._sequences.add(sequence)
+
+    def _build_sequence_node(self, parent: DebugSequenceNode, elem: dict) -> None:
+        info = elem.get('info', "")
+        if any(node in elem for node in self._control_nodes):
+            if 'if' in elem:
+                node = IfControl(elem['if'], info)
+            elif 'while' in elem:
+                node = WhileControl(elem['while'], info, int(elem.get('timeout', "0")))
+
+            parent.add_child(node)
+
+            if 'blocks' in elem:
+                for child in elem['blocks']:
+                    self._build_sequence_node(node, child)
+            elif 'execute' in elem:
+                child = {k: v for k, v in elem.items() if k not in self._control_nodes}
+                self._build_sequence_node(node, child)
+        else:
+            if 'execute' in elem:
+                is_atomic = True if 'atomic' in elem else False
+                node = Block(elem['execute'], is_atomic, info)
+                parent.add_child(node)
+
+
+class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
+    ## Map from pyocd reset types to the __connection variable reset type field.
+    # 0=error, 1=hw, 2=SYSRESETREQ, 3=VECTRESET
+    RESET_TYPE_MAP = {
+        Target.ResetType.HW: 1,
+        Target.ResetType.SW: 2, # TODO pick default sw reset type
+        Target.ResetType.SW_SYSRESETREQ: 2,
+        Target.ResetType.SW_VECTRESET: 3,
+        Target.ResetType.SW_EMULATED: 2, # no direct match
+    }
+
+    def __init__(self, target: CoreSightTarget, device: CbuildRun) -> None:
+        self._target = target
+        self._session = target.session
+        self._device = device
+        self._cbuild_run_sequences = CbuildRunSequences(device.debug_vars, device.debug_sequences)
+        self._sequences: Set[DebugSequence] = self._cbuild_run_sequences.sequences
+        self._debugvars: Optional[Scope] = None
+        self._functions = DebugSequenceCommonFunctions()
+
+    @property
+    def all_sequences(self) -> Set[DebugSequence]:
+        return self._sequences
+
+    @property
+    def cmsis_pack_device(self) -> CbuildRun:
+        return self._device
+
+    def get_root_scope(self, context: DebugSequenceExecutionContext) -> Scope:
+        if self._debugvars is not None:
+            return self._debugvars
+
+        self._debugvars = Scope(name='debugvars')
+        debugvars_block = self._cbuild_run_sequences.variables
+        if debugvars_block is not None:
+            with context.push(debugvars_block, self._debugvars):
+                debugvars_block.execute(context)
+
+        # Make all vars read-only.
+        self._debugvars.freeze()
+
+        if LOG.isEnabledFor(logging.INFO):
+            for name in sorted(self._debugvars.variables):
+                value = self._debugvars.get(name)
+                LOG.info(f"debugvar '{name}' = {value:#x} ({value:d})")
+
+        return self._debugvars
+
+    def run_sequence(self, name: str, pname: Optional[str] = None) -> Optional[Scope]:
+        pname_desc = f" ({pname})" if (pname and LOG.isEnabledFor(logging.DEBUG)) else ""
+
+        # Error out for invalid sequence.
+        if not self.has_sequence_with_name(name, pname):
+            raise NameError(name)
+
+        # Get sequence object.
+        seq = self.get_sequence_with_name(name, pname)
+
+        # If the sequence is disabled, we won't run it.
+        if not seq.is_enabled:
+            LOG.debug(f"Not running disabled debug sequence '{name}'{pname_desc}")
+            return None
+
+        LOG.debug(f"Running debug sequence '{name}'{pname_desc}")
+
+        # Create runtime context and contextified functions instance.
+        context = DebugSequenceExecutionContext(self._session, self, pname)
+
+        # Map optional pname to AP address. If the pname is not specified, then use the device's
+        # first available AP. If not APs are known (eg haven't been discovered yet) then use 0.
+        if pname:
+            proc_map = self._device.processors_map
+            ap_address = proc_map[pname].ap_address
+        else:
+            ap = self._target.first_ap
+            if ap is not None:
+                ap_address = ap.address
+            else:
+                ap_address = APv1Address(0)
+
+        # Set the default AP in the exec context.
+        context.default_ap = ap_address
+
+        with context:
+            try:
+                executed_scope = seq.execute(context)
+            except exceptions.Error as err:
+                if pname:
+                    LOG.error(f"Error while running debug sequence '{name}' (core {pname}): {err}")
+                else:
+                    LOG.error(f"Error while running debug sequence '{name}': {err}")
+                raise
+
+        return executed_scope
+
+
+    def sequences_for_pname(self, pname: Optional[str]) -> Dict[str, DebugSequence]:
+        # Return *only* sequences with no Pname when passed pname=None. Otherwise we'd have
+        # to mangle the dict keys to include pname since there can be multiple sequences with
+        # the same name but different
+        return {
+            seq.name: seq
+            for seq in self._sequences
+            if (seq.pname is None) or (seq.pname == pname)
+        }
+
+    def has_sequence_with_name(self, name: str, pname: Optional[str] = None) -> bool:
+        return name in self.sequences_for_pname(pname)
+
+    def get_sequence_with_name(self, name: str, pname: Optional[str] = None) -> DebugSequence:
+        return self.sequences_for_pname(pname)[name]
+
+    def get_protocol(self) -> int:
+        """@brief Return the value for the __protocol variable.
+        __protocol fields:
+        - [15:0] 0=error, 1=JTAG, 2=SWD, 3=cJTAG
+        - [16] SWJ-DP present?
+        - [17] switch through dormant state?
+        """
+        session = self._target.session
+        assert session.probe, "must have a valid probe"
+        # Not having a wire protocol set is allowed if performing pre-reset since it will only
+        # execute ResetHardware (or equivalent), which can only access pins and such (theoretically).
+        assert self._session.context_state.is_performing_pre_reset or session.probe.wire_protocol, \
+            "must have valid, connected probe"
+        if session.probe.wire_protocol == DebugProbe.Protocol.JTAG:
+            protocol = 1
+        elif session.probe.wire_protocol == DebugProbe.Protocol.SWD:
+            protocol = 2
+        else:
+            protocol = 0 # Error
+        if session.options.get('dap_swj_enable'):
+            protocol |= 1 << 16
+        if session.options.get('dap_swj_use_dormant'):
+            protocol |= 1 << 17
+        return protocol
+
+    def get_connection_type(self) -> int:
+        """@brief Return the value for the __connection variable.
+        __connection fields:
+        - [7:0] connection type: 0=error/disconnected, 1=for debug, 2=for flashing
+        - [15:8] reset type: 0=error, 1=hw, 2=SYSRESETREQ, 3=VECTRESET
+        - [16] connect under reset?
+        - [17] pre-connect reset?
+        """
+        ctype = 1
+        ctype |= self.RESET_TYPE_MAP.get(self._session.options.get('reset_type'), 0) << 8
+
+        connect_mode = self._target.session.options.get('connect_mode')
+        if connect_mode == 'under-reset':
+            ctype |= 1 << 16
+
+        # The pre-reset bit should only be set when running ResetHardware for a connect pre-reset.
+        # This is stored in the is_performing_pre_reset session state variable, set by CoreSightTarget's
+        # pre_connect() method.
+        if self._session.context_state.is_performing_pre_reset:
+            ctype |= 1 << 17
+        return ctype
+
+    def get_traceout(self) -> int:
+        """@brief Return the value for the __traceout variable.
+        __traceout fields:
+        - [0] SWO enabled?
+        - [1] parallel trace enabled?
+        - [2] trace buffer enabled?
+        - [21:16] selected parallel trace port size
+        """
+        # Set SWO bit depending on the option value.
+        return 1 if self._target.session.options.get('enable_swv') else 0
+
+    def get_sequence_functions(self) -> DebugSequenceCommonFunctions:
+        return self._functions

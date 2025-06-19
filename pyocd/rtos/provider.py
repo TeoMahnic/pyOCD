@@ -47,9 +47,10 @@ class TargetThread(object):
 class ThreadProvider(object):
     """@brief Base class for RTOS support plugins."""
 
-    def __init__(self, target):
+    def __init__(self, target, non_stop=False):
         self._target = target
         self._target_context = self._target.get_target_context()
+        self._non_stop = non_stop
         self._last_run_token = -1
         self._read_from_target = False
 
@@ -76,6 +77,9 @@ class ThreadProvider(object):
     def _is_thread_list_dirty(self):
         token = self._target.run_token
         if token == self._last_run_token:
+            if self._non_stop and self._target.is_running():
+                # Target is running and gdb is in non-stop mode, so we need to update the thread list.
+                return True
             # Target hasn't run since we last updated threads, so there is nothing to do.
             return False
         self._last_run_token = token

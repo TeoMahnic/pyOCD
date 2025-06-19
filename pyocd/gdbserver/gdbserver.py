@@ -169,6 +169,7 @@ class GDBServer(threading.Thread):
         self.thread_provider = None
         self.did_init_thread_providers = False
         self.current_thread_id = 0
+        self.stopped_threads = []
         self.first_run_after_reset_or_flash = True
 
         self.abstract_socket = ListenerSocket(self.port, self.packet_size)
@@ -314,6 +315,7 @@ class GDBServer(threading.Thread):
     def _cleanup_for_next_connection(self):
         self.non_stop = False
         self.thread_provider = None
+        self.stopped_threads.clear()
         self.did_init_thread_providers = False
         self.current_thread_id = 0
 
@@ -550,9 +552,12 @@ class GDBServer(threading.Thread):
             self.validate_debug_context()
             return self.create_rsp_packet(b'E00')
 
-    def validate_debug_context(self):
+    def validate_debug_context(self, threadId=None):
         if self.is_threading_enabled():
-            currentThread = self.thread_provider.current_thread
+            if threadId is not None:
+                currentThread = self.thread_provider.get_thread(threadId)
+            else:
+                currentThread = self.thread_provider.current_thread
             if self.current_thread_id != currentThread.unique_id:
                 self.target_facade.set_context(currentThread.context)
                 self.current_thread_id = currentThread.unique_id
@@ -707,6 +712,9 @@ class GDBServer(threading.Thread):
         data = self.get_t_response(forceSignal=forceSignal)
         packet = b'%Stop:' + data + b'#' + checksum(data)
         self.packet_io.send(packet)
+        self.stopped_threads = self.thread_provider.get_threads()
+        if self.stopped_threads:
+            self.stopped_threads.remove(self.thread_provider.current_thread)
 
     def v_command(self, data):
         cmd = data.split(b'#')[0]
@@ -717,16 +725,22 @@ class GDBServer(threading.Thread):
 
         # v_cont capabilities query.
         elif b'Cont?' == cmd:
-            return self.create_rsp_packet(b"vCont;c;C;s;S;r;t")
+            return self.create_rsp_packet(b"vCont;c;C;s;S;r;t;vCtrlC")
 
         # v_cont, thread action command.
         elif cmd.startswith(b'Cont'):
             return self.v_cont(cmd)
 
+        # Interrupt command.
+        elif b'CtrlC' in cmd and self.non_stop:
+            # Set the interrupt event so that the main loop can handle it.
+            # Note: This is currently only used for Linux targets.
+            self.packet_io.interrupt_event.set()
+            return self.create_rsp_packet(b"OK")
+
         # vStopped, part of thread stop state notification sequence.
         elif b'Stopped' in cmd:
-            # Because we only support one thread for now, we can just reply OK to vStopped.
-            return self.create_rsp_packet(b"OK")
+            return self.v_stopped(cmd)
 
         return self.create_rsp_packet(b"")
 
@@ -772,6 +786,10 @@ class GDBServer(threading.Thread):
             if self.non_stop:
                 self.target.resume()
                 self.is_target_running = True
+                if self.first_run_after_reset_or_flash:
+                    self.first_run_after_reset_or_flash = False
+                    if self.thread_provider is not None:
+                        self.thread_provider.read_from_target = True
                 return self.create_rsp_packet(b"OK")
             else:
                 return self.resume(None)
@@ -789,15 +807,22 @@ class GDBServer(threading.Thread):
             else:
                 return self.step(None, start, end)
         elif thread_actions[currentThread] == b't':
-            # Must ignore t command in all-stop mode.
-            if not self.non_stop:
-                return self.create_rsp_packet(b"")
             self.packet_io.send(self.create_rsp_packet(b"OK"))
             self.target.halt()
             self.is_target_running = False
             self.send_stop_notification(forceSignal=0)
         else:
             LOG.error("Unsupported v_cont action '%s'" % thread_actions[1])
+
+    def v_stopped(self, cmd):
+        # If threading is enabled we must report all stopped threads.
+        if self.is_threading_enabled() and self.stopped_threads:
+            threadId = self.stopped_threads.pop().unique_id
+            response = self.get_t_response(threadId=threadId)
+            return self.create_rsp_packet(response)
+        else:
+            self.stopped_threads = []
+        return self.create_rsp_packet(b"OK")
 
     def flash_op(self, data):
         ops = data.split(b':')[0]
@@ -1012,7 +1037,7 @@ class GDBServer(threading.Thread):
                 continue
             try:
                 LOG.debug("Attempting to load %s", rtos_name)
-                rtos = rtos_class(self.target)
+                rtos = rtos_class(self.target, self.non_stop)
                 if rtos.init(symbol_provider):
                     LOG.info("%s loaded successfully", rtos_name)
                     self.thread_provider = rtos
@@ -1198,15 +1223,19 @@ class GDBServer(threading.Thread):
 
         return -1, 0
 
-    def get_t_response(self, forceSignal=None):
-        self.validate_debug_context()
+    def get_t_response(self, forceSignal=None, threadId=None):
+        self.validate_debug_context(threadId)
         response = self.target_facade.get_t_response(forceSignal)
+        if threadId is not None:
+            self.validate_debug_context()
 
         # Append thread
         if not self.is_threading_enabled():
             response += b"thread:1;"
         else:
-            if self.current_thread_id in (-1, 0, 1):
+            if threadId is not None:
+                response += ("thread:%x;" % threadId).encode()
+            elif self.current_thread_id in (-1, 0, 1):
                 response += ("thread:%x;" % self.thread_provider.current_thread.unique_id).encode()
             else:
                 response += ("thread:%x;" % self.current_thread_id).encode()

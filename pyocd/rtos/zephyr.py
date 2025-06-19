@@ -1,5 +1,5 @@
 # pyOCD debugger
-# Copyright (c) 2016-2020 Arm Limited
+# Copyright (c) 2016-2020,2025 Arm Limited
 # Copyright (c) 2022 Intel Corporation
 # Copyright (c) 2022 Chris Reed
 # SPDX-License-Identifier: Apache-2.0
@@ -263,8 +263,8 @@ class ZephyrThreadProvider(ThreadProvider):
         't_name',
     ]
 
-    def __init__(self, target):
-        super(ZephyrThreadProvider, self).__init__(target)
+    def __init__(self, target, non_stop=False):
+        super(ZephyrThreadProvider, self).__init__(target, non_stop)
         self._symbols = None
         self._offsets = None
         self._version = None

@@ -1,5 +1,6 @@
 # pyOCD debugger
 # Copyright (c) 2020-2021 Federico Zuccardi Merli
+# Copyright (c) 2025 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -373,8 +374,8 @@ class ThreadXThreadProvider(ThreadProvider):
     # Scheduler not yet up
     TX_INITIALIZE_IN_PROGRESS = 0xF0F0F0F0
 
-    def __init__(self, target):
-        super(ThreadXThreadProvider, self).__init__(target)
+    def __init__(self, target, non_stop=False):
+        super(ThreadXThreadProvider, self).__init__(target, non_stop)
         self._created_ptr = None
         self._created_cnt = None
         self._current_ptr = None

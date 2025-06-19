@@ -1,5 +1,5 @@
 # pyOCD debugger
-# Copyright (c) 2016-2020 Arm Limited
+# Copyright (c) 2016-2020,2025 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -331,8 +331,8 @@ class ArgonThread(TargetThread):
 class ArgonThreadProvider(ThreadProvider):
     """@brief Base class for RTOS support plugins."""
 
-    def __init__(self, target):
-        super(ArgonThreadProvider, self).__init__(target)
+    def __init__(self, target, non_stop=False):
+        super(ArgonThreadProvider, self).__init__(target, non_stop)
         self.g_ar = None
         self.g_ar_objects = None
         self._all_threads = None

@@ -1,5 +1,5 @@
 # pyOCD debugger
-# Copyright (c) 2016-2020 Arm Limited
+# Copyright (c) 2016-2020,2025 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -324,8 +324,8 @@ class FreeRTOSThreadProvider(ThreadProvider):
         "xSchedulerRunning",
         ]
 
-    def __init__(self, target):
-        super(FreeRTOSThreadProvider, self).__init__(target)
+    def __init__(self, target, non_stop=False):
+        super(FreeRTOSThreadProvider, self).__init__(target, non_stop)
         self._symbols = None
         self._total_priorities = 0
         self._threads = {}

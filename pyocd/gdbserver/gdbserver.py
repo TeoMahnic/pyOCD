@@ -22,7 +22,8 @@ from time import sleep
 import sys
 import io
 from xml.etree.ElementTree import (Element, SubElement, tostring)
-from typing import (Dict, List, Optional, Tuple)
+from typing import (Dict, List, Optional, Tuple, Generator)
+from contextlib import contextmanager
 
 from ..core import exceptions
 from ..core.target import Target
@@ -566,6 +567,22 @@ class GDBServer(threading.Thread):
                 LOG.debug("Current thread %x is no longer valid, switching context to target", self.current_thread_id)
                 self.target_facade.set_context(self.target_context)
                 self.current_thread_id = 1
+
+    @contextmanager
+    def _debug_context(self, threadId: Optional[int]=None) -> Generator:
+        """
+        Temporarily switch into `thread_id` (if given) or into the
+        thread_provider's current thread (if not).  On exit, restore
+        the *previous* context only if an override was applied.
+        """
+        current_id = self.current_thread_id
+        self.validate_debug_context(threadId)
+        try:
+            yield
+        finally:
+            if threadId is not None and threadId != current_id:
+                # Restore the original thread context.
+                self.validate_debug_context(current_id)
 
     def stop_reason_query(self):
         # In non-stop mode, if no threads are stopped we need to reply with OK.
@@ -1224,10 +1241,8 @@ class GDBServer(threading.Thread):
         return -1, 0
 
     def get_t_response(self, forceSignal=None, threadId=None):
-        self.validate_debug_context(threadId)
-        response = self.target_facade.get_t_response(forceSignal)
-        if threadId is not None:
-            self.validate_debug_context()
+        with self._debug_context(threadId):
+            response = self.target_facade.get_t_response(forceSignal)
 
         # Append thread
         if not self.is_threading_enabled():

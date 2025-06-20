@@ -406,12 +406,14 @@ class RTX5ThreadProvider(ThreadProvider):
         if self._os_rtx_info is None:
             return False
         try:
-            if self._target.get_state() != Target.State.HALTED:
-                # If target is running, we can only check if the kernel state is Running.
-                return self.get_kernel_state() >= RTXTargetThread.STATE_RUNNING
-            # If we're in Thread mode on the main stack, can't be active, even
-            # if kernel state says we are (eg post reset)
-            return self.get_kernel_state() != 0 and not self._target.in_thread_mode_on_main_stack()
+            # If target is running, we can only check if the kernel state is Running.
+            enabled = self.get_kernel_state() >= RTXTargetThread.STATE_RUNNING
+            if self._target.get_state() == Target.State.HALTED:
+                # When halted, if the CPU is in Thread mode using the main stack,
+                # the RTOS kernel is not actually running, even if the kernel state indicates otherwise.
+                if self._target.in_thread_mode_on_main_stack():
+                    enabled = False
+            return enabled
         except exceptions.TransferError as exc:
             LOG.debug("Transfer error checking if enabled: %s", exc)
             return False

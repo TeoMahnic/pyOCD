@@ -128,7 +128,7 @@ CSW_TINPROG  =  0x00000080 # Not implemented on M33 AHB5-AP
 CSW_ERRNPASS =  0x00010000 # MEM-APv2 only
 CSW_ERRSTOP  =  0x00020000 # MEM-APv2 only
 CSW_SDEVICEEN = 0x00800000 # Also called SPIDEN in ADIv5
-CSW_HPROT    =  0x0f000000
+CSW_HPROT    =  0x7f000000
 CSW_MSTRTYPE =  0x20000000 # Only present in M3/M3 AHB-AP, RES0 in others
 CSW_MSTRCORE =  0x00000000
 CSW_MSTRDBG  =  0x20000000
@@ -388,8 +388,18 @@ class AccessPort:
         except KeyError:
             # The AP ID doesn't match, but we can recognize unknown MEM-APs.
             if (apClass == AP_CLASS_MEM_AP) and (designer == AP_JEP106_ARM):
-                name = "MEM-AP"
-                klass = MEM_AP
+                if apType in (AP_TYPE_AHB, AP_TYPE_AHB5, AP_TYPE_AHB5_HPROT):
+                    name = "AHB-AP"
+                    klass = AHB_AP
+                elif apType in (AP_TYPE_APB, AP_TYPE_APB4):
+                    name = "APB-AP"
+                    klass = APB_AP
+                elif apType in (AP_TYPE_AXI, AP_TYPE_AXI5):
+                    name = "AXI-AP"
+                    klass = AXI_AP
+                else:
+                    name = "MEM-AP"
+                    klass = MEM_AP
             else:
                 name = None
                 klass = AccessPort
@@ -529,22 +539,12 @@ class MEM_AP(AccessPort, memory_interface.MemoryInterface):
 
     This class supports MEM-AP v1 and v2.
 
-    The bits of HPROT have the following meaning. Not all bits are implemented in all
-    MEM-APs. AHB-Lite only implements HPROT[3:0].
-
-    HPROT[0] = 1 data access, 0 instr fetch<br/>
-    HPROT[1] = 1 priviledge, 0 user<br/>
-    HPROT[2] = 1 bufferable, 0 non bufferable<br/>
-    HPROT[3] = 1 cacheable/modifable, 0 non cacheable<br/>
-    HPROT[4] = 1 lookupincache, 0 no cache<br/>
-    HPROT[5] = 1 allocate in cache, 0 no allocate in cache<br/>
-    HPROT[6] = 1 shareable, 0 non shareable<br/>
-
     Extensions not supported:
     - Large Data Extension
     - Large Physical Address Extension
     - Barrier Operation Extension
     """
+    AP_ALL_TX_SZ = 0x2 # The AP is known to support 8-, 16-, and 32-bit transfers, *unless* Large Data is implemented.
 
     def __init__(
                 self,
@@ -568,6 +568,7 @@ class MEM_AP(AccessPort, memory_interface.MemoryInterface):
         self._impl_hprot: int = 0
         self._impl_hnonsec: int = 0
 
+        # TODO: Use whole PROT field here!
         ## Default HPROT value for CSW.
         self._hprot: int = HPROT_DATA | HPROT_PRIVILEGED
 
@@ -741,7 +742,7 @@ class MEM_AP(AccessPort, memory_interface.MemoryInterface):
             """
             # If AP_ALL_TX_SZ is set, we can skip the test. Double check this by ensuring that LD is not
             # enabled.
-            if (self._flags & AP_ALL_TX_SZ) and not self._has_large_data:
+            if (self._flags & self.AP_ALL_TX_SZ) and not self._has_large_data:
                 self._transfer_sizes = {8, 16, 32}
                 return
 
@@ -1303,22 +1304,28 @@ class AHB_AP(MEM_AP):
     certain ROM table entries will read as zeroes or other garbage.
     """
 
+    def __init__(
+                self,
+                dp: DebugPort,
+                ap_address: APAddressBase,
+                idr: Optional[int] = None,
+                name: Optional[str] = None,
+                flags: int = 0,
+                cmpid: Optional[CoreSightComponentID] = None
+            ) -> None:
+        flags |= self.AP_ALL_TX_SZ
+        super().__init__(dp, ap_address, idr, name, flags, cmpid)
+
     @locked
     def init(self) -> None:
         super().init()
 
         # Check for and enable the Master Type bit on AHB-APs where it might be implemented.
         if self._flags & AP_MSTRTYPE:
-            self._init_mstrtype()
-
-    def _init_mstrtype(self) -> None:
-        """@brief Set master type control in CSW.
-
-        Only the v1 AHB-AP from Cortex-M3 and Cortex-M4 implements the MSTRTYPE flag to control
-        whether transactions appear as debugger or internal accesses.
-        """
-        # Set the master type to "debugger" for AP's that support this field.
-        self._csw |= CSW_MSTRDBG
+            # Only the v1 AHB-AP from Cortex-M3 and Cortex-M4 implements the MSTRTYPE flag to control
+            # whether transactions appear as debugger or internal accesses.
+            # Set the master type to "debugger" for AP's that support this field.
+            self._csw |= CSW_MSTRDBG
 
     def find_components(self) -> None:
         # Turn on DEMCR.TRCENA before reading the ROM table. Some ROM table entries can
@@ -1333,6 +1340,84 @@ class AHB_AP(MEM_AP):
 
         # Invoke superclass.
         super().find_components()
+
+    @MEM_AP.hprot.setter
+    @locked
+    def hprot(self, value: int) -> None:
+        if self.ap_type in (AP_TYPE_AHB, AP_TYPE_AHB5):
+            AHB_CSW_HPROT_MASK = 0x0F000000 # PROT [27-24]
+            self._hprot = value & (AHB_CSW_HPROT_MASK >> CSW_HPROT_SHIFT)
+            self._csw = ((self._csw & ~AHB_CSW_HPROT_MASK) | (self._hprot << CSW_HPROT_SHIFT))
+        elif self.ap_type == AP_TYPE_AHB5_HPROT:
+            AHB_CSW_HPROT_MASK = 0x0F000000 # PROT [27-24]
+            AHB_CSW_HPROT6_MASK = 0x0
+            AHB_CSW_HPROT6_SHIFT = 15 # HPROT[6] is in CSW[15]
+            # On AHB5-AP with enhanced HPROT support bit [15] drives the HPROT[6] bit.
+            _hprot_bit = (value & AHB_CSW_HPROT6_MASK) >> 6 # HPROT[6]
+            value = value & 0x3F # Clear HPROT[6]
+            self._hprot = value & (AHB_CSW_HPROT_MASK >> CSW_HPROT_SHIFT)
+            self._csw = self._csw | (_hprot_bit << 15) # set value of HPROT[6] in CSW[15]
+
+class AXI_AP(MEM_AP):
+    """@brief AXI-AP access port subclass."""
+
+    def __init__(
+                self,
+                dp: DebugPort,
+                ap_address: APAddressBase,
+                idr: Optional[int] = None,
+                name: Optional[str] = None,
+                flags: int = 0,
+                cmpid: Optional[CoreSightComponentID] = None
+            ) -> None:
+        flags |= self.AP_ALL_TX_SZ
+        super().__init__(dp, ap_address, idr, name, flags, cmpid)
+
+    @MEM_AP.hprot.setter
+    @locked
+    def hprot(self, value: int) -> None:
+        if self.ap_type in (AP_TYPE_AXI, AP_TYPE_AXI5):
+            AXI_CSW_HPROT_MASK = 0x70000000 # PROT [30-28], CACHE [27-24]
+        else:
+            return
+
+        self._hprot = value & (AXI_CSW_HPROT_MASK >> CSW_HPROT_SHIFT)
+        self._csw = ((self._csw & ~AXI_CSW_HPROT_MASK) | (self._hprot << CSW_HPROT_SHIFT))
+
+    @MEM_AP.hnonsec.setter
+    @locked
+    def hnonsec(self, value: int) -> None:
+        pass
+
+class APB_AP(MEM_AP):
+    """@brief APB-AP access port subclass."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        if self.ap_type == AP_TYPE_APB:
+            self._hprot = 0x0 # Reset value for PROT []
+        elif self.ap_type == AP_TYPE_APB4:
+            self._hprot = 0x30 # Reset value for PROT []
+
+    @MEM_AP.hprot.setter
+    @locked
+    def hprot(self, value: int) -> None:
+        if self.ap_type == AP_TYPE_APB:
+            # APB2 and APB3 don't support PROT, so we don't set it.
+            APB_CSW_HPROT_MASK = 0x00000000 # PROT {RES0}
+            self._hprot = value & (APB_CSW_HPROT_MASK >> CSW_HPROT_SHIFT)
+            self._csw = ((self._csw & ~APB_CSW_HPROT_MASK) | (self._hprot << CSW_HPROT_SHIFT))
+        elif self.ap_type == AP_TYPE_APB4:
+            APB_CSW_HPROT_MASK = 0x70000000 # PROT [30-28]
+            self._hprot = value & (APB_CSW_HPROT_MASK >> CSW_HPROT_SHIFT)
+            self._csw = ((self._csw & ~APB_CSW_HPROT_MASK) | (self._hprot << CSW_HPROT_SHIFT))
+
+    @MEM_AP.hnonsec.setter
+    @locked
+    def hnonsec(self, value: int) -> None:
+        # APB-APs do not support HNONSEC, so this setter does nothing.
+        pass
 
 ## @brief Arm JEP106 code
 #
@@ -1362,7 +1447,6 @@ AP_TYPE_AHB5_HPROT = 0x8
 
 # AP flags.
 AP_4K_WRAP = 0x1 # The AP has a 4 kB auto-increment modulus.
-AP_ALL_TX_SZ = 0x2 # The AP is known to support 8-, 16-, and 32-bit transfers, *unless* Large Data is implemented.
 AP_MSTRTYPE = 0x4 # The AP is known to support the MSTRTYPE field.
 AP_DBGSWEN = 0x8 # The AP is known to support the DBGSWEN flag.
 AP_SPROT = 0x10 # The AP is known to support the SPROT field.
@@ -1388,23 +1472,23 @@ AP_SPROT = 0x10 # The AP is known to support the SPROT field.
 # 0x54770002 APB-AP used on STM32H743, from CSSoC-400
 # 0x34770017 AXI5-AP from Corstone-700
 AP_TYPE_MAP: Dict[Tuple[int, int, int, int], Tuple[str, Type[AccessPort], int]] = {
-#   |JEP106        |Class              |Var|Type                    |Name      |Class
-    (AP_JEP106_ARM, AP_CLASS_JTAG_AP,   0,  0):                     ("JTAG-AP", AccessPort, 0   ),
-    (AP_JEP106_ARM, AP_CLASS_COM_AP,    0,  0):                     ("SDC-600", AccessPort, 0   ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_ALL_TX_SZ|AP_SPROT ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_ALL_TX_SZ|AP_4K_WRAP|AP_MSTRTYPE ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    2,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    3,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    4,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_APB):           ("APB-AP",  MEM_AP,     AP_DBGSWEN   ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AXI):           ("AXI-AP",  MEM_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     AP_ALL_TX_SZ|AP_SPROT ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    2,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_APB4):          ("APB4-AP", MEM_AP,     0   ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AXI5):          ("AXI5-AP", MEM_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AXI5):          ("AXI5-AP", MEM_AP,     AP_ALL_TX_SZ ),
-    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB5_HPROT):    ("AHB5-AP", MEM_AP,     AP_ALL_TX_SZ|AP_SPROT ),
+#   |JEP106        |Class              |Var|Type                    |Name      |Class      |Flags
+    (AP_JEP106_ARM, AP_CLASS_JTAG_AP,   0,  0):                     ("JTAG-AP", AccessPort, 0),
+    (AP_JEP106_ARM, AP_CLASS_COM_AP,    0,  0):                     ("SDC-600", AccessPort, 0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_SPROT),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     AP_4K_WRAP|AP_MSTRTYPE),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    2,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    3,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    4,  AP_TYPE_AHB):           ("AHB-AP",  AHB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_APB):           ("APB-AP",  APB_AP,     AP_DBGSWEN),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AXI):           ("AXI-AP",  AXI_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     AP_SPROT),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    2,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_APB4):          ("APB4-AP", APB_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AXI5):          ("AXI5-AP", AXI_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    1,  AP_TYPE_AXI5):          ("AXI5-AP", AXI_AP,     0),
+    (AP_JEP106_ARM, AP_CLASS_MEM_AP,    0,  AP_TYPE_AHB5_HPROT):    ("AHB5-AP", AHB_AP,     AP_SPROT),
     (AP_JEP106_ARM_CHINA,
-                    AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     AP_ALL_TX_SZ ),
+                    AP_CLASS_MEM_AP,    1,  AP_TYPE_AHB5):          ("AHB5-AP", AHB_AP,     0),
     }

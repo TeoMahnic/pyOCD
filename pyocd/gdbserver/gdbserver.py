@@ -729,9 +729,10 @@ class GDBServer(threading.Thread):
         data = self.get_t_response(forceSignal=forceSignal)
         packet = b'%Stop:' + data + b'#' + checksum(data)
         self.packet_io.send(packet)
-        self.stopped_threads = self.thread_provider.get_threads()
-        if self.stopped_threads:
-            self.stopped_threads.remove(self.thread_provider.current_thread)
+        if self.is_threading_enabled():
+            self.stopped_threads = self.thread_provider.get_threads()
+            if self.stopped_threads:
+                self.stopped_threads.remove(self.thread_provider.current_thread)
 
     def v_command(self, data):
         cmd = data.split(b'#')[0]

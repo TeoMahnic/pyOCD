@@ -157,6 +157,8 @@ class Target(MemoryInterface, DelegateHavingMixIn):
         PRE_FLASH_PROGRAM = 9
         ## Sent after target flash has been reprogrammed.
         POST_FLASH_PROGRAM = 10
+        ## Sent when breakpoint is set or removed.
+        BREAKPOINT = 11
 
     class RunType(Enum):
         """Run type for run notifications.

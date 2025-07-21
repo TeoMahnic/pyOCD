@@ -478,6 +478,8 @@ class GDBServer(threading.Thread):
                     return self.create_rsp_packet(b'E01') #EPERM
             else:
                 self.target.remove_breakpoint(addr)
+            if self.non_stop and self.is_target_running:
+                self.session.notify(Target.Event.BREAKPOINT, self.target)
             return self.create_rsp_packet(b"OK")
 
         # handle hardware breakpoint Z1/z1
@@ -487,6 +489,8 @@ class GDBServer(threading.Thread):
                     return self.create_rsp_packet(b'E01') #EPERM
             else:
                 self.target.remove_breakpoint(addr)
+            if self.non_stop and self.is_target_running:
+                self.session.notify(Target.Event.BREAKPOINT, self.target)
             return self.create_rsp_packet(b"OK")
 
         # handle hardware watchpoint Z2/z2/Z3/z3/Z4/z4
@@ -508,6 +512,8 @@ class GDBServer(threading.Thread):
                 return self.create_rsp_packet(b'E01') #EPERM
         else:
             self.target.remove_watchpoint(addr, size, watchpoint_type)
+        if self.non_stop and self.is_target_running:
+            self.session.notify(Target.Event.BREAKPOINT, self.target)
         return self.create_rsp_packet(b"OK")
 
     def set_thread(self, data):

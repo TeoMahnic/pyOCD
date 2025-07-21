@@ -63,6 +63,7 @@ class BreakpointManager:
         # Subscribe to some notifications.
         self._session.subscribe(self._pre_run_handler, Target.Event.PRE_RUN)
         self._session.subscribe(self._pre_disconnect_handler, Target.Event.PRE_DISCONNECT)
+        self._session.subscribe(self._breakpoint_handler, Target.Event.BREAKPOINT)
 
     def add_provider(self, provider: "BreakpointProvider") -> None:
         self._providers[provider.bp_type] = provider
@@ -161,12 +162,12 @@ class BreakpointManager:
 
         # Get added breakpoints.
         for bp in self._updated_breakpoints.values():
-            if not bp.addr in self._breakpoints:
+            if bp.addr not in self._breakpoints:
                 added.append(bp)
 
         # Get removed breakpoints.
         for bp in self._breakpoints.values():
-            if not bp.addr in self._updated_breakpoints:
+            if bp.addr not in self._updated_breakpoints:
                 removed.append(bp)
 
         # Return the list of pages to update.
@@ -314,4 +315,7 @@ class BreakpointManager:
     def _pre_disconnect_handler(self, notification: "Notification") -> None:
         pass
 
-
+    def _breakpoint_handler(self, notification: "Notification") -> None:
+        """@brief Flush breakpoints when a breakpoint event occurs."""
+        if not self._ignore_notifications:
+            self.flush()

@@ -110,6 +110,7 @@ class GDBServer(threading.Thread):
 
     def __init__(self, session, core=None, port=None):
         super().__init__()
+        self.daemon = True
         self.session = session
         self.board = session.board
         if core is None:
@@ -266,8 +267,6 @@ class GDBServer(threading.Thread):
             }
 
         # pylint: enable=invalid-name
-
-        self.setDaemon(True)
 
     def _init_remote_commands(self):
         """@brief Initialize the remote command processor infrastructure."""
@@ -866,6 +865,7 @@ class GDBServer(threading.Thread):
         except exceptions.TransferError as e:
             LOG.debug("get_memory failed at 0x%x: %s", addr, str(e))
             val = b'E01' #EPERM
+
         return self.create_rsp_packet(val)
 
     def write_memory_hex(self, data):

@@ -791,7 +791,7 @@ class GDBServer(threading.Thread):
             action = args[0]
             if len(args) > 1:
                 thread_id = int(args[1], 16)
-                if thread_id == -1 or thread_id == 0:
+                if thread_id == -1 or thread_id == 0 or thread_id not in thread_actions:
                     thread_id = currentThread
                 thread_actions[thread_id] = action
             else:

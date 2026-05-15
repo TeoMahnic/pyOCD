@@ -782,6 +782,57 @@ class CbuildRun:
         sv = self.debugger.get('systemview') or {}
         return sv.get('auto-stop')
 
+    @property
+    def trace_mode(self) -> Optional[str]:
+        trace = self.debugger.get('trace')
+        mode = trace.get('mode') if trace else None
+        if mode not in {'server', 'file'} or self.trace_port_type is None:
+            return None
+        return mode
+
+    @property
+    def trace_port_type(self) -> Optional[str]:
+        trace = self.debugger.get('trace')
+        port_type = trace.get('port-type') if trace else None
+        if port_type is not None and port_type.upper() != 'SWO-UART':
+            LOG.warning("Trace port type '%s' is not supported; trace will not be enabled", port_type)
+            return None
+        else:
+            port_type = 'SWO-UART'
+        return port_type
+
+    @property
+    def trace_input_clock(self) -> Optional[int]:
+        trace = self.debugger.get('trace')
+        clock = trace.get('input-clock') if trace else None
+        if clock is None:
+            LOG.warning("Trace input clock not specified in cbuild-run; trace will not be enabled")
+        return clock
+
+    @property
+    def trace_output_clock(self) -> Optional[int]:
+        #TODO auto-detect if not provided or value is 0
+        trace = self.debugger.get('trace')
+        clock = trace.get('output-clock') if trace else None
+        if clock is None:
+            LOG.warning("Trace output clock not specified in cbuild-run; trace may not function correctly")
+        return clock
+
+    @property
+    def trace_port(self) -> Optional[int]:
+        trace = self.debugger.get('trace')
+        if trace and trace.get('mode') == 'server':
+            return trace.get('server-port', 5555)
+        return None
+
+    @property
+    def trace_file(self) -> Optional[str]:
+        trace = self.debugger.get('trace')
+        if trace and trace.get('mode') == 'file':
+            default = self._cbuild_run_path.split('.cbuild-run')[0] + '.trace'
+            return trace.get('file', default)
+        return None
+
     def populate_target(self, target: Optional[str] = None) -> None:
         """@brief Generates and populates the target defined by the .cbuild-run.yml file."""
         if target is None:

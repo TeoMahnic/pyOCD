@@ -94,6 +94,8 @@ class RunSubcommand(SubcommandBase):
 
         timelimit_triggered = False
         with session:
+            if session.options.get('enable_swv'):
+                session.target.trace_start()
 
             # Increase log level to INFO if it is still at the default WARNING level
             root_logger = logging.getLogger()
@@ -163,6 +165,9 @@ class RunSubcommand(SubcommandBase):
                 LOG.exception("Unhandled exception in 'run' subcommand")
                 self.shutdown()
                 return 1
+            finally:
+                if session.options.get('enable_swv'):
+                    session.target.trace_stop()
 
             if timelimit_triggered:
                 return 0

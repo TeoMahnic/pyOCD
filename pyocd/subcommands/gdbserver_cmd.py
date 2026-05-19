@@ -223,6 +223,9 @@ class GdbserverSubcommand(SubcommandBase):
                 if self._args.reset_run:
                     session.board.target.reset()
 
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
+
                 # Start up the gdbservers.
                 for core_number, core in session.board.target.cores.items():
                     # Don't create a server for CPU-less memory Access Port.
@@ -244,6 +247,8 @@ class GdbserverSubcommand(SubcommandBase):
                     sleep(0.1)
                 if probe_server:
                     probe_server.stop()
+                if session.options.get('enable_swv'):
+                    session.target.trace_stop()
         except (KeyboardInterrupt, Exception):
             for server in gdbs:
                 server.stop()

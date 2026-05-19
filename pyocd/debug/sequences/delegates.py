@@ -37,6 +37,11 @@ class DebugSequenceDelegate:
         raise NotImplementedError()
 
     @property
+    def full_trace_setup(self) -> bool:
+        """@brief Returns whether full trace setup is enabled."""
+        return False
+
+    @property
     def cmsis_pack_device(self) -> CmsisPackDevice:
         """@brief Accessor for the pack device that contains the sequences."""
         raise NotImplementedError()
@@ -104,6 +109,22 @@ class DebugSequenceDelegate:
         - [21:16] selected parallel trace port size
         """
         raise NotImplementedError()
+
+    def get_traceclockin(self) -> int:
+        """@brief Return the value for the __traceclockin variable.
+
+        Returns the system (input) clock frequency in Hz that drives the trace unit.
+        Returns 0 if the system clock is not configured.
+        """
+        return 0
+
+    def get_traceclockout(self) -> int:
+        """@brief Return the value for the __traceclockout variable.
+
+        Returns the desired SWO output clock (baud rate) in Hz.
+        Returns 0 if the output clock is not configured.
+        """
+        return 0
 
     def get_sequence_functions(self) -> DebugSequenceFunctionsDelegate:
         """@brief Return an instance of the sequence function implementations delegate.

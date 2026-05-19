@@ -465,6 +465,11 @@ class CbuildRun:
         return self._vars
 
     @property
+    def debug_sequences_conf(self) -> Dict[str, Any]:
+        """@brief Debug sequence configuration."""
+        return self._data.get('debug-sequences-conf', {})
+
+    @property
     def valid_dps(self) -> List[int]:
         """@brief List of valid debug ports."""
         if not self._valid_dps:
@@ -1234,9 +1239,9 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         self._device = device
         self._cbuild_sequences = CbuildRunSequences(device)
         self._sequences: Set[DebugSequence] = self._cbuild_sequences.sequences
+        self._full_trace_setup = device.debug_sequences_conf.get('fullTraceSetup', False)
         self._debugvars: Optional[Scope] = None
         self._functions = DebugSequenceCommonFunctions()
-
         self._all_sequences: Optional[Set[DebugSequence]] = None
         self._generic_map: Optional[Dict[str, DebugSequence]] = None
 
@@ -1258,6 +1263,11 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
             for pname_dict in self._specific_map_by_pname.values():
                 self._all_sequences.update(pname_dict.values())
         return self._all_sequences
+
+    @property
+    def full_trace_setup(self) -> bool:
+        """@brief Returns whether full trace setup is enabled from cbuild-run configuration."""
+        return self._full_trace_setup
 
     @property
     def cmsis_pack_device(self) -> CbuildRun:
@@ -1441,6 +1451,18 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         """
         # Set SWO bit depending on the option value.
         return 1 if self._target.session.options.get('enable_swv') else 0
+
+    def get_traceclockin(self) -> int:
+        """@brief Return the system clock frequency in Hz for __traceclockin.
+        Returns 0 if the system clock is not configured.
+        """
+        return self._target.session.options.get('swv_system_clock') or 0
+
+    def get_traceclockout(self) -> int:
+        """@brief Return the SWO output clock in Hz for __traceclockout.
+        Returns 0 if the output clock is not configured.
+        """
+        return self._target.session.options.get('swv_clock') or 0
 
     def get_sequence_functions(self) -> DebugSequenceCommonFunctions:
         return self._functions

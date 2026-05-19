@@ -17,9 +17,10 @@
 # limitations under the License.
 
 import logging
+from pathlib import Path
 import threading
 from time import sleep
-from typing import (Optional, TextIO, TYPE_CHECKING)
+from typing import (BinaryIO, Optional, TextIO, TYPE_CHECKING)
 
 from .sink import TraceEventSink
 from .events import (TraceEvent, TraceITMEvent)
@@ -92,6 +93,10 @@ class SWVReader(threading.Thread):
         assert target
         self._target = target
         self._core = target.cores[core_number]
+        if target.debug_sequence_delegate is not None:
+            self._full_trace_setup = target.debug_sequence_delegate.full_trace_setup
+        else:
+            self._full_trace_setup = False
 
         self._session.subscribe(self._reset_handler, Target.Event.POST_RESET, self._core)
 
@@ -120,26 +125,25 @@ class SWVReader(threading.Thread):
             LOG.warning(f"SWV not initalized: Probe {self._session.probe.unique_id} does not support SWO")
             return False
 
-        itm = self._target.get_first_child_of_type(ITM)
-        if not itm:
-            LOG.warning("SWV not initalized: Target does not have ITM component")
-            return False
-        tpiu = self._target.get_first_child_of_type(TPIU, 'has_swo_uart')
-        if not tpiu:
-            LOG.warning("SWV not initalized: Target does not have TPIU component")
-            return False
+        if not self._full_trace_setup:
+            itm = self._target.get_first_child_of_type(ITM)
+            if not itm:
+                LOG.warning("SWV not initalized: Target does not have ITM component")
+                return False
+            tpiu = self._target.get_first_child_of_type(TPIU, 'has_swo_uart')
+            if not tpiu:
+                LOG.warning("SWV not initalized: Target does not have TPIU component with SWO UART mode")
+                return False
 
-        self._target.trace_start()
+            itm.init()
+            itm.enable()
+            tpiu.init()
 
-        itm.init()
-        itm.enable()
-        tpiu.init()
-
-        if tpiu.set_swo_clock(swo_clock, sys_clock):
-            LOG.info("Set SWO clock to %d", swo_clock)
-        else:
-            LOG.warning("SWV not initalized: Failed to set SWO clock rate")
-            return False
+            if tpiu.set_swo_clock(swo_clock, sys_clock):
+                LOG.info("Set SWO clock to %d", swo_clock)
+            else:
+                LOG.warning("SWV not initalized: Failed to set SWO clock rate")
+                return False
 
         self._parser = SWOParser(self._core)
         self._sink = SWVEventSink(console)
@@ -163,12 +167,11 @@ class SWVReader(threading.Thread):
         self._shutdown_event.set()
         self.join()
 
-        # init() should never have started the SWV thread unless the target has ITM and TPIU.
-        itm = self._target.get_first_child_of_type(ITM)
-        assert itm
-        itm.disable()
-
-        self._target.trace_stop()
+        if not self._full_trace_setup:
+            # init() should never have started the SWV thread unless the target has ITM and TPIU.
+            itm = self._target.get_first_child_of_type(ITM)
+            assert itm
+            itm.disable()
 
     def run(self) -> None:
         """@brief SWV reader thread routine.
@@ -182,12 +185,23 @@ class SWVReader(threading.Thread):
         if self._lock:
             self._lock.acquire()
 
-        swv_raw_server = StreamServer(
-                            self._session.options.get('swv_raw_port'),
-                            serve_local_only=self._session.options.get('serve_local_only'),
-                            name="SWV raw",
-                            is_read_only=True) \
-                         if self._session.options.get('swv_raw_enable') else None
+        swv_raw_server = None
+        swv_raw_file: Optional[BinaryIO] = None
+        if self._session.options.get('swv_raw_enable'):
+            raw_file_name = self._session.options.get('swv_raw_file')
+            if raw_file_name:
+                # swv_raw_file takes precedence over swv_raw_port.
+                raw_file_path = Path(raw_file_name).expanduser()
+                try:
+                    swv_raw_file = raw_file_path.open('wb')
+                except OSError as err:
+                    LOG.warning("Failed to open SWV raw output file '%s': %s", raw_file_path, err)
+            else:
+                swv_raw_server = StreamServer(
+                                    self._session.options.get('swv_raw_port'),
+                                    serve_local_only=self._session.options.get('serve_local_only'),
+                                    name="SWV raw",
+                                    is_read_only=True)
 
         # Stop SWO first in case the probe already had it started. Ignore if this fails.
         try:
@@ -199,7 +213,9 @@ class SWVReader(threading.Thread):
         while not self._shutdown_event.is_set():
             data = self._session.probe.swo_read()
             if data:
-                if swv_raw_server:
+                if swv_raw_file:
+                    swv_raw_file.write(data)
+                elif swv_raw_server:
                     swv_raw_server.write(data)
                 self._parser.parse(data)
 
@@ -212,6 +228,10 @@ class SWVReader(threading.Thread):
                 self._lock.acquire()
 
         self._session.probe.swo_stop()
+
+        if swv_raw_file:
+            swv_raw_file.flush()
+            swv_raw_file.close()
 
         if swv_raw_server:
             swv_raw_server.stop()
@@ -227,4 +247,3 @@ class SWVReader(threading.Thread):
         """
         if self.is_alive():
             self._target.trace_start()
-

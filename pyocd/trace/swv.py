@@ -58,6 +58,9 @@ class SWVEventSink(TraceEventSink):
         if not isinstance(event, TraceITMEvent):
             return
 
+        if event.port != 0:
+            return
+
         # Extract bytes.
         if event.width == 1:
             data = chr(event.data)

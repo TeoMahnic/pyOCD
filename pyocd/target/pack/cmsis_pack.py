@@ -69,11 +69,13 @@ class _DeviceInfo:
     memories: List[Element] = field(default_factory=list)
     algos: List[Element] = field(default_factory=list)
     debugs: List[Element] = field(default_factory=list)
+    sequence_blocks: List[Element] = field(default_factory=list)
     sequences: List[Element] = field(default_factory=list)
     debugvars: List[Element] = field(default_factory=list)
     debugports: List[Element] = field(default_factory=list)
     accessports: List[Element] = field(default_factory=list)
     flashinfo: List[Element] = field(default_factory=list)
+    full_trace_setup: bool = False
 
 @dataclass
 class ProcessorInfo:
@@ -280,6 +282,7 @@ class CmsisPackDescription:
             elif elem.tag == 'debug':
                 newState.debugs.append(elem)
             elif elem.tag == 'sequences':
+                newState.sequence_blocks.append(elem)
                 newState.sequences += elem.findall('sequence')
             elif elem.tag == 'debugvars':
                 newState.debugvars.append(elem)
@@ -310,6 +313,7 @@ class CmsisPackDescription:
                                         debugports=self._extract_debugports(),
                                         accessports=self._extract_accessports(),
                                         flashinfo=self._extract_flashinfo(),
+                                        full_trace_setup=self._extract_full_trace_setup(),
                                         )
 
             # Support ._pack being None for testing.
@@ -578,6 +582,15 @@ class CmsisPackDescription:
             map[(name, pname)] = elem
 
         return self._extract_items('sequences', filter)
+
+    def _extract_full_trace_setup(self) -> bool:
+        """@brief Extract the fullTraceSetup attribute from inherited <sequences> elements."""
+        full_trace_setup = False
+        for state in self._state_stack:
+            for elem in state.sequence_blocks:
+                if 'fullTraceSetup' in elem.attrib:
+                    full_trace_setup = elem.attrib['fullTraceSetup'].lower() in ('1', 'true')
+        return full_trace_setup
 
     def _extract_debugvars(self) -> List[Element]:
         """@brief Extract debugvar elements.
@@ -1208,6 +1221,11 @@ class CmsisPackDevice:
             assert elem.text is not None # Ensured by CmsisPackDescription._extract_debugvars.
             self._debugvars = Block(elem.text, info="debugvars")
         return self._debugvars
+
+    @property
+    def full_trace_setup(self) -> bool:
+        """@brief Whether debug sequences perform full trace setup."""
+        return self._info.full_trace_setup
 
     @property
     def valid_dps(self) -> List[int]:

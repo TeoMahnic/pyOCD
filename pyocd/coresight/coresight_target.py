@@ -357,38 +357,32 @@ class CoreSightTarget(SoCTarget):
             return None
         return sorted(self.aps.values(), key=lambda v: v.address)[0]
 
-    def trace_start(self):
+    def trace_start(self) -> None:
         result = self.call_delegate('trace_start', target=self, mode=0)
         if not result and self.has_debug_sequence('TraceStart', pname=self.selected_core_or_raise.node_name):
             assert self.debug_sequence_delegate
             self.debug_sequence_delegate.run_sequence('TraceStart',
                     pname=self.selected_core_or_raise.node_name)
-            result = True
-        return result
 
-    def trace_stop(self):
+    def trace_stop(self) -> None:
         result = self.call_delegate('trace_stop', target=self, mode=0)
         if not result and self.has_debug_sequence('TraceStop', pname=self.selected_core_or_raise.node_name):
             assert self.debug_sequence_delegate
             self.debug_sequence_delegate.run_sequence('TraceStop',
                     pname=self.selected_core_or_raise.node_name)
-            result = True
-        return result
 
-    def trace_capture(self):
+    def trace_capture(self) -> None:
         result = self.call_delegate('trace_capture', target=self, mode=0)
         if not result and self.has_debug_sequence('TraceCapture', pname=self.selected_core_or_raise.node_name):
             assert self.debug_sequence_delegate
-            self.debug_sequence_delegate.run_sequence('TraceCapture',
-                    pname=self.selected_core_or_raise.node_name)
-            result = True
-        return result
+            if self.debug_sequence_delegate.full_trace_setup:
+                self.debug_sequence_delegate.run_sequence('TraceCapture',
+                        pname=self.selected_core_or_raise.node_name)
 
-    def trace_flush(self):
+    def trace_flush(self) -> None:
         result = self.call_delegate('trace_flush', target=self, mode=0)
         if not result and self.has_debug_sequence('TraceFlush', pname=self.selected_core_or_raise.node_name):
             assert self.debug_sequence_delegate
-            self.debug_sequence_delegate.run_sequence('TraceFlush',
-                    pname=self.selected_core_or_raise.node_name)
-            result = True
-        return result
+            if self.debug_sequence_delegate.full_trace_setup:
+                self.debug_sequence_delegate.run_sequence('TraceFlush',
+                        pname=self.selected_core_or_raise.node_name)

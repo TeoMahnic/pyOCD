@@ -166,6 +166,8 @@ class GDBClientSession(threading.Thread):
                     if self.is_interrupted():
                         if self.non_stop:
                             self._server.target.halt()
+                            if self._server.session.options.get('enable_swv'):
+                                self._server.board.target.trace_flush()
                             self._server.is_target_running = False
                             self._server.send_stop_notification(self)
                         else:
@@ -178,6 +180,8 @@ class GDBClientSession(threading.Thread):
                                 LOG.debug("Target halted")
                                 self._server.is_target_running = False
                                 self._server.send_stop_notification(self)
+                                if self._server.session.options.get('enable_swv'):
+                                    self._server.board.target.trace_flush()
                         except Exception as e:
                             LOG.error("Unexpected exception: %s", e, exc_info=self._server.session.log_tracebacks)
 
@@ -804,6 +808,8 @@ class GDBServer(threading.Thread):
             else:
                 LOG.debug("Command: Continue")
 
+        if self.session.options.get('enable_swv'):
+            self.board.target.trace_capture()
         self.target.resume()
         LOG.debug("Target resumed")
 
@@ -835,6 +841,8 @@ class GDBServer(threading.Thread):
                 # is running) then ignore the error. In all cases we still return SIGINT.
                 try:
                     self.target.halt()
+                    if self.session.options.get('enable_swv'):
+                        self.board.target.trace_flush()
                     val = self.get_t_response(client, forceSignal=signals.SIGINT)
                 except exceptions.TransferError as e:
                     # Note: if the target is not actually halted, gdb can get confused from this point on.
@@ -859,6 +867,8 @@ class GDBServer(threading.Thread):
                     fault_retry_timeout.clear()
 
                 if state == Target.State.HALTED:
+                    if self.session.options.get('enable_swv'):
+                        self.board.target.trace_flush()
                     # Handle semihosting
                     if self.enable_semihosting and self._semihosting_client is None:
                         self._semihosting_client = client
@@ -870,6 +880,8 @@ class GDBServer(threading.Thread):
                             self._semihosting_client = None
 
                         if was_semihost:
+                            if self.session.options.get('enable_swv'):
+                                self.board.target.trace_capture()
                             self.target.resume()
                             continue
 
@@ -914,7 +926,11 @@ class GDBServer(threading.Thread):
         def step_hook():
             # Note we don't clear the interrupt event here!
             return client.is_interrupted()
+        if self.session.options.get('enable_swv'):
+            self.board.target.trace_capture()
         self.target.step(not self.step_into_interrupt, start, end, hook_cb=step_hook)
+        if self.session.options.get('enable_swv'):
+            self.board.target.trace_flush()
 
         # Clear and handle an interrupt.
         if client.is_interrupted():
@@ -999,6 +1015,8 @@ class GDBServer(threading.Thread):
         if thread_actions[currentThread][0:1] in (b'c', b'C'):
             LOG.debug("Command: vCont (threadId=0x%08x, action=continue)", currentThread)
             if client.non_stop:
+                if self.session.options.get('enable_swv'):
+                    self.board.target.trace_capture()
                 self.target.resume()
                 self.is_target_running = True
                 return self.create_rsp_packet(b"OK")
@@ -1014,7 +1032,11 @@ class GDBServer(threading.Thread):
                 LOG.debug("Command: vCont (threadId=0x%08x, action=step)", currentThread)
 
             if client.non_stop:
+                if self.session.options.get('enable_swv'):
+                    self.board.target.trace_capture()
                 self.target.step(not self.step_into_interrupt, start, end)
+                if self.session.options.get('enable_swv'):
+                    self.board.target.trace_flush()
                 client.send(self.create_rsp_packet(b"OK"))
                 self.send_stop_notification(client)
                 return None
@@ -1027,6 +1049,8 @@ class GDBServer(threading.Thread):
                 return self.create_rsp_packet(b"")
             client.send(self.create_rsp_packet(b"OK"))
             self.target.halt()
+            if self.session.options.get('enable_swv'):
+                self.board.target.trace_flush()
             self.is_target_running = False
             self.send_stop_notification(client, forceSignal=0)
         else:

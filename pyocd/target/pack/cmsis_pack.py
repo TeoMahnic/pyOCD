@@ -69,13 +69,12 @@ class _DeviceInfo:
     memories: List[Element] = field(default_factory=list)
     algos: List[Element] = field(default_factory=list)
     debugs: List[Element] = field(default_factory=list)
-    sequence_blocks: List[Element] = field(default_factory=list)
     sequences: List[Element] = field(default_factory=list)
     debugvars: List[Element] = field(default_factory=list)
     debugports: List[Element] = field(default_factory=list)
     accessports: List[Element] = field(default_factory=list)
     flashinfo: List[Element] = field(default_factory=list)
-    full_trace_setup: bool = False
+    full_trace_setup: Optional[bool] = None
 
 @dataclass
 class ProcessorInfo:
@@ -282,7 +281,8 @@ class CmsisPackDescription:
             elif elem.tag == 'debug':
                 newState.debugs.append(elem)
             elif elem.tag == 'sequences':
-                newState.sequence_blocks.append(elem)
+                if 'fullTraceSetup' in elem.attrib:
+                    newState.full_trace_setup = _get_bool_attribute(elem, 'fullTraceSetup')
                 newState.sequences += elem.findall('sequence')
             elif elem.tag == 'debugvars':
                 newState.debugvars.append(elem)
@@ -585,12 +585,11 @@ class CmsisPackDescription:
 
     def _extract_full_trace_setup(self) -> bool:
         """@brief Extract the fullTraceSetup attribute from inherited <sequences> elements."""
-        full_trace_setup = False
+        result = False
         for state in self._state_stack:
-            for elem in state.sequence_blocks:
-                if 'fullTraceSetup' in elem.attrib:
-                    full_trace_setup = elem.attrib['fullTraceSetup'].lower() in ('1', 'true')
-        return full_trace_setup
+            if state.full_trace_setup is not None:
+                result = state.full_trace_setup
+        return result
 
     def _extract_debugvars(self) -> List[Element]:
         """@brief Extract debugvar elements.
@@ -1225,7 +1224,7 @@ class CmsisPackDevice:
     @property
     def full_trace_setup(self) -> bool:
         """@brief Whether debug sequences perform full trace setup."""
-        return self._info.full_trace_setup
+        return self._info.full_trace_setup or False
 
     @property
     def valid_dps(self) -> List[int]:

@@ -791,20 +791,20 @@ class CbuildRun:
     def trace_mode(self) -> Optional[str]:
         trace = self.debugger.get('trace')
         mode = trace.get('mode') if trace else None
-        if mode not in {'server', 'file'} or self.trace_port_type is None:
-            return None
-        return mode
+        if mode in {'server', 'file'} and self.trace_port_type in {'SWO-UART', None}:
+            return mode
+        if mode:
+            LOG.warning("Trace mode '%s' is not supported; trace will not be enabled", mode)
+        return None
 
     @property
     def trace_port_type(self) -> Optional[str]:
         trace = self.debugger.get('trace')
         port_type = trace.get('port-type') if trace else None
-        if port_type is not None and port_type.upper() != 'SWO-UART':
-            LOG.warning("Trace port type '%s' is not supported; trace will not be enabled", port_type)
-            return None
-        else:
-            port_type = 'SWO-UART'
-        return port_type
+        if port_type in {'SWO-UART', None}:
+            return port_type
+        LOG.warning("Trace port type '%s' is not supported; trace will not be enabled", port_type)
+        return None
 
     @property
     def trace_input_clock(self) -> Optional[int]:
@@ -819,8 +819,6 @@ class CbuildRun:
         #TODO auto-detect if not provided or value is 0
         trace = self.debugger.get('trace')
         clock = trace.get('output-clock') if trace else None
-        if clock is None:
-            LOG.warning("Trace output clock not specified in cbuild-run; trace may not function correctly")
         return clock
 
     @property

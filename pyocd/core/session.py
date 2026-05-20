@@ -297,7 +297,7 @@ class Session(Notifier):
         debugger_options['systemview_auto_start'] = self.cbuild_run.systemview_auto_start
         debugger_options['systemview_auto_stop'] = self.cbuild_run.systemview_auto_stop
 
-        if self.cbuild_run.trace_mode is not None and self.cbuild_run.trace_input_clock is not None:
+        if self.cbuild_run.trace_mode and self.cbuild_run.trace_input_clock is not None:
             debugger_options['enable_swv'] = True
             debugger_options['swv_system_clock'] = self.cbuild_run.trace_input_clock
             debugger_options['swv_clock'] = self.cbuild_run.trace_output_clock

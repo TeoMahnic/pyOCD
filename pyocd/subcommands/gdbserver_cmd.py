@@ -1,6 +1,6 @@
 # pyOCD debugger
 # Copyright (c) 2021 Chris Reed
-# Copyright (c) 2025 Arm Limited
+# Copyright (c) 2025-2026 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +31,7 @@ from ..utility.cmdline import (
     )
 from ..probe.shared_probe_proxy import SharedDebugProbeProxy
 from ..gdbserver import GDBServer
+from ..trace.swv import SWVReader
 from ..probe.tcp_probe_server import DebugProbeServer
 from ..coresight.generic_mem_ap import GenericMemAPTarget
 from ..utility.notification import Notification
@@ -219,14 +220,25 @@ class GdbserverSubcommand(SubcommandBase):
                     session.probeserver = probe_server
                     probe_server.start()
 
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
+
+                # Initialize SWV reader before any GDB activity.
+                self._swv_reader = None
+                if session.options.get("enable_swv"):
+                    if "swv_system_clock" not in session.options:
+                        LOG.warning("SWV not enabled; swv_system_clock option missing")
+                    else:
+                        sys_clock = int(session.options.get("swv_system_clock"))
+                        swo_clock = int(session.options.get("swv_clock"))
+                        self._swv_reader = SWVReader(session)
+                        self._swv_reader.init(sys_clock, swo_clock, sys.stdout)
+
                 # Reset and run the target
                 if self._args.reset_run:
                     session.board.target.reset()
 
-                if session.options.get('enable_swv'):
-                    session.target.trace_start()
-
-                # Start up the gdbservers.
+                # Create and start GDB servers.
                 for core_number, core in session.board.target.cores.items():
                     # Don't create a server for CPU-less memory Access Port.
                     if isinstance(session.board.target.cores[core_number], GenericMemAPTarget):
@@ -247,6 +259,9 @@ class GdbserverSubcommand(SubcommandBase):
                     sleep(0.1)
                 if probe_server:
                     probe_server.stop()
+                if self._swv_reader:
+                    self._swv_reader.stop()
+                    self._swv_reader = None
                 if session.options.get('enable_swv'):
                     session.target.trace_stop()
         except (KeyboardInterrupt, Exception):

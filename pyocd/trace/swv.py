@@ -79,15 +79,13 @@ class SWVEventSink(TraceEventSink):
 class SWVReader(threading.Thread):
     """@brief Sets up SWV and processes data in a background thread."""
 
-    def __init__(self, session: "Session", core_number: int = 0, lock: Optional[threading.Lock] = None) -> None:
+    def __init__(self, session: "Session", lock: Optional[threading.RLock] = None) -> None:
         """@brief Constructor.
         @param self
         @param session The Session instance.
-        @param core_number The number of the core being traced. Default is core 0.
         """
         super().__init__(name="SWVReader", daemon=True)
         self._session = session
-        self._core_number = core_number
         self._shutdown_event = threading.Event()
         self._swo_clock = 0
         self._lock = lock
@@ -95,7 +93,7 @@ class SWVReader(threading.Thread):
         target = self._session.target
         assert target
         self._target = target
-        self._core = target.cores[core_number]
+        self._core = target.primary_core
         if target.debug_sequence_delegate is not None:
             self._full_trace_setup = target.debug_sequence_delegate.full_trace_setup
         else:

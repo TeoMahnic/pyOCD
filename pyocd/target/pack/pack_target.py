@@ -428,13 +428,17 @@ class PackDebugSequenceDelegate(DebugSequenceDelegate):
         """@brief Return the system clock frequency in Hz for __traceclockin.
         Returns 0 if the system clock is not configured.
         """
-        return self._target.session.options.get('swv_system_clock') or 0
+        if self._target.session.options.get('enable_swv'):
+            return self._target.session.options.get('swv_system_clock') or 0
+        return 0
 
     def get_traceclockout(self) -> int:
         """@brief Return the SWO output clock in Hz for __traceclockout.
         Returns 0 if the output clock is not configured.
         """
-        return self._target.session.options.get('swv_clock') or 0
+        if self._target.session.options.get('enable_swv'):
+            return self._target.session.options.get('swv_clock') or 0
+        return 0
 
     def get_sequence_functions(self) -> DebugSequenceCommonFunctions:
         return self._functions

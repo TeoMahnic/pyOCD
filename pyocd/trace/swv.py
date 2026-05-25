@@ -79,7 +79,7 @@ class SWVEventSink(TraceEventSink):
 class SWVReader(threading.Thread):
     """@brief Sets up SWV and processes data in a background thread."""
 
-    def __init__(self, session: "Session", lock: Optional[threading.RLock] = None) -> None:
+    def __init__(self, session: "Session") -> None:
         """@brief Constructor.
         @param self
         @param session The Session instance.
@@ -88,7 +88,6 @@ class SWVReader(threading.Thread):
         self._session = session
         self._shutdown_event = threading.Event()
         self._swo_clock = 0
-        self._lock = lock
 
         target = self._session.target
         assert target
@@ -183,9 +182,6 @@ class SWVReader(threading.Thread):
         """
         assert self._session.probe
 
-        if self._lock:
-            self._lock.acquire()
-
         swv_raw_server = None
         swv_raw_file: Optional[BinaryIO] = None
         if self._session.options.get('swv_raw_enable'):
@@ -220,13 +216,7 @@ class SWVReader(threading.Thread):
                     swv_raw_server.write(data)
                 self._parser.parse(data)
 
-            if self._lock:
-                self._lock.release()
-
             sleep(0.001)
-
-            if self._lock:
-                self._lock.acquire()
 
         self._session.probe.swo_stop()
 
@@ -236,9 +226,6 @@ class SWVReader(threading.Thread):
 
         if swv_raw_server:
             swv_raw_server.stop()
-
-        if self._lock:
-            self._lock.release()
 
     def _reset_handler(self, notification: "Notification") -> None:
         """@brief Reset notification handler.

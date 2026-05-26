@@ -17,7 +17,6 @@
 import argparse
 from typing import List, Optional
 import logging
-import sys
 import threading
 from time import sleep, time
 
@@ -95,18 +94,7 @@ class RunSubcommand(SubcommandBase):
 
         timelimit_triggered = False
         with session:
-            if session.options.get('enable_swv'):
-                session.target.trace_start()
-
             self._swv_reader = None
-            if session.options.get("enable_swv"):
-                if "swv_system_clock" not in session.options:
-                    LOG.warning("SWV not enabled; swv_system_clock option missing")
-                else:
-                    sys_clock = int(session.options.get("swv_system_clock"))
-                    swo_clock = int(session.options.get("swv_clock"))
-                    self._swv_reader = SWVReader(session)
-                    self._swv_reader.init(sys_clock, swo_clock, sys.stdout)
 
             # Increase log level to INFO if it is still at the default WARNING level
             root_logger = logging.getLogger()
@@ -135,6 +123,8 @@ class RunSubcommand(SubcommandBase):
             else:
                 self._systemview = None
             try:
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
                 # Start up the run servers
                 for core_number, core in session.board.target.cores.items():
                     # Don't create a server for CPU-less memory Access Port
@@ -148,6 +138,19 @@ class RunSubcommand(SubcommandBase):
                                            enable_eot=self._args.eot,
                                            shutdown_event=self.shared_shutdown)
                     self._run_servers.append(run_server)
+
+                # Initialize SWVReader with the primary core's stdio handler so that
+                # SWV output is routed through the same channel as semihosting.
+                if session.options.get("enable_swv"):
+                    if "swv_system_clock" not in session.options:
+                        LOG.warning("SWV not enabled; swv_system_clock option missing")
+                    else:
+                        sys_clock = int(session.options.get("swv_system_clock"))
+                        swo_clock = int(session.options.get("swv_clock"))
+                        primary_server = next((s for s in self._run_servers if s.core == 0), None)
+                        console = primary_server._stdio_handler if primary_server is not None else None
+                        self._swv_reader = SWVReader(session)
+                        self._swv_reader.init(sys_clock, swo_clock, console)
 
                 # Reset the target and start RunServers
                 session.target.reset()
@@ -232,9 +235,6 @@ class RunServer(threading.Thread):
         else:
             self._enable_semihosting = True
 
-        # Lock to synchronize SWO with other activity
-        self._lock = threading.RLock()
-
         # Use internal IO handler.
         semihost_io_handler = semihost.InternalSemihostIOHandler()
 
@@ -285,8 +285,6 @@ class RunServer(threading.Thread):
 
             state_check_interval_counter += 1
 
-            self._lock.acquire()
-
             try:
                 if self._rtt_server:
                     self._rtt_server.poll()
@@ -332,7 +330,6 @@ class RunServer(threading.Thread):
                 LOG.error("Error while target core %d running: %s; exiting Run server for core %d", self.core, e, self.core, exc_info=self._session.log_tracebacks)
                 break
             finally:
-                self._lock.release()
                 sleep(0.001)
 
         # Check if we exited the above loop due to a timeout after a fault.

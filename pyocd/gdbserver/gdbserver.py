@@ -523,6 +523,7 @@ class GDBServer(threading.Thread):
 
                     # Make sure the target is halted. Otherwise gdb gets easily confused.
                     self.target.halt()
+                    self.is_target_running = False
 
                     # Start the per-client handler thread (server.run_session() will be invoked there).
                     client.start()

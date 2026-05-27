@@ -138,81 +138,82 @@ class GdbserverSubcommand(SubcommandBase):
 
         probe_server = None
         gdbs = []
-        try:
-            # Build dict of session options.
-            sessionOptions = convert_session_options(self._args.options)
-            modifiable_options = {
-                'gdbserver_port' : self._args.port_number,
-                'telnet_port' : self._args.telnet_port,
-                'persist' : self._args.persist,
-                'step_into_interrupt' : self._args.step_into_interrupt,
-                'chip_erase': self._args.erase,
-                'fast_program' : self._args.trust_crc,
-                'enable_semihosting' : self._args.enable_semihosting,
-                'serve_local_only' : self._args.serve_local_only,
-                'vector_catch' : self._args.vector_catch,
-                'soft_bkpt_as_hard' : self._args.soft_bkpt_as_hard,
-                }
-            modified_options = {k: v for k, v in modifiable_options.items() if v is not None}
-            sessionOptions.update(modified_options)
+        # Build dict of session options.
+        sessionOptions = convert_session_options(self._args.options)
+        modifiable_options = {
+            'gdbserver_port' : self._args.port_number,
+            'telnet_port' : self._args.telnet_port,
+            'persist' : self._args.persist,
+            'step_into_interrupt' : self._args.step_into_interrupt,
+            'chip_erase': self._args.erase,
+            'fast_program' : self._args.trust_crc,
+            'enable_semihosting' : self._args.enable_semihosting,
+            'serve_local_only' : self._args.serve_local_only,
+            'vector_catch' : self._args.vector_catch,
+            'soft_bkpt_as_hard' : self._args.soft_bkpt_as_hard,
+            }
+        modified_options = {k: v for k, v in modifiable_options.items() if v is not None}
+        sessionOptions.update(modified_options)
 
-            # Split list of cores to serve.
-            if self._args.core is not None:
-                try:
-                    core_list = {int(x) for x in self._args.core.split(',')}
-                except ValueError as err:
-                    LOG.error("Invalid value passed to --core")
-                    return 1
-            else:
-                core_list = None
+        # Split list of cores to serve.
+        if self._args.core is not None:
+            try:
+                core_list = {int(x) for x in self._args.core.split(',')}
+            except ValueError as err:
+                LOG.error("Invalid value passed to --core")
+                return 1
+        else:
+            core_list = None
 
-            # Get the probe.
-            probe = ConnectHelper.choose_probe(
-                        blocking=(not self._args.no_wait),
-                        return_first=False,
-                        unique_id=self._args.unique_id,
-                        )
-            if probe is None:
-                LOG.error("No probe selected.")
+        # Get the probe.
+        probe = ConnectHelper.choose_probe(
+                    blocking=(not self._args.no_wait),
+                    return_first=False,
+                    unique_id=self._args.unique_id,
+                    )
+        if probe is None:
+            LOG.error("No probe selected.")
+            return 1
+
+        # Create a proxy so the probe can be shared between the session and probe server.
+        probe_proxy = SharedDebugProbeProxy(probe)
+
+        # Create the session.
+        session = Session(probe_proxy,
+            project_dir=self._args.project_dir,
+            user_script=self._args.script,
+            config_file=self._args.config,
+            no_config=self._args.no_config,
+            pack=self._args.pack,
+            cbuild_run=self._args.cbuild_run,
+            unique_id=self._args.unique_id,
+            target_override=self._args.target_override,
+            frequency=self._args.frequency,
+            connect_mode=self._args.connect_mode,
+            options=sessionOptions,
+            option_defaults=self._modified_option_defaults(),
+        )
+        if session is None:
+            LOG.error("No probe selected.")
+            return 1
+        with session:
+            # Validate the core selection.
+            all_cores = set(session.target.cores.keys())
+            if core_list is None:
+                core_list = all_cores
+            bad_cores = core_list.difference(all_cores)
+            if len(bad_cores):
+                LOG.error("Invalid core number%s: %s",
+                    "s" if len(bad_cores) > 1 else "",
+                    ", ".join(str(x) for x in bad_cores))
                 return 1
 
-            # Create a proxy so the probe can be shared between the session and probe server.
-            probe_proxy = SharedDebugProbeProxy(probe)
+            # Set ELF if provided.
+            if self._args.elf:
+                session.board.target.elf = os.path.expanduser(self._args.elf)
 
-            # Create the session.
-            session = Session(probe_proxy,
-                project_dir=self._args.project_dir,
-                user_script=self._args.script,
-                config_file=self._args.config,
-                no_config=self._args.no_config,
-                pack=self._args.pack,
-                cbuild_run=self._args.cbuild_run,
-                unique_id=self._args.unique_id,
-                target_override=self._args.target_override,
-                frequency=self._args.frequency,
-                connect_mode=self._args.connect_mode,
-                options=sessionOptions,
-                option_defaults=self._modified_option_defaults(),
-            )
-            if session is None:
-                LOG.error("No probe selected.")
-                return 1
-            with session:
-                # Validate the core selection.
-                all_cores = set(session.target.cores.keys())
-                if core_list is None:
-                    core_list = all_cores
-                bad_cores = core_list.difference(all_cores)
-                if len(bad_cores):
-                    LOG.error("Invalid core number%s: %s",
-                        "s" if len(bad_cores) > 1 else "",
-                        ", ".join(str(x) for x in bad_cores))
-                    return 1
-
-                # Set ELF if provided.
-                if self._args.elf:
-                    session.board.target.elf = os.path.expanduser(self._args.elf)
-
+            swv_reader = None
+            try:
                 # Run the probe server is requested.
                 if self._args.enable_probe_server:
                     probe_server = DebugProbeServer(session, session.probe,
@@ -224,15 +225,14 @@ class GdbserverSubcommand(SubcommandBase):
                     session.target.trace_start()
 
                 # Initialize SWV reader before any GDB activity.
-                self._swv_reader = None
                 if session.options.get("enable_swv"):
                     if "swv_system_clock" not in session.options:
                         LOG.warning("SWV not enabled; swv_system_clock option missing")
                     else:
                         sys_clock = int(session.options.get("swv_system_clock"))
                         swo_clock = int(session.options.get("swv_clock"))
-                        self._swv_reader = SWVReader(session)
-                        self._swv_reader.init(sys_clock, swo_clock, sys.stdout)
+                        swv_reader = SWVReader(session)
+                        swv_reader.init(sys_clock, swo_clock, sys.stdout)
 
                 # Reset and run the target
                 if self._args.reset_run:
@@ -257,18 +257,16 @@ class GdbserverSubcommand(SubcommandBase):
 
                 while any(g.is_alive() for g in gdbs):
                     sleep(0.1)
+            finally:
+                for server in gdbs:
+                    server.stop()
                 if probe_server:
                     probe_server.stop()
-                if self._swv_reader:
-                    self._swv_reader.stop()
-                    self._swv_reader = None
+                    probe_server = None
+                if swv_reader:
+                    swv_reader.stop()
+                    swv_reader = None
                 if session.options.get('enable_swv'):
                     session.target.trace_stop()
-        except (KeyboardInterrupt, Exception):
-            for server in gdbs:
-                server.stop()
-            if probe_server:
-                probe_server.stop()
-            raise
 
         return 0

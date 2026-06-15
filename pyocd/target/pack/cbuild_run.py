@@ -39,7 +39,7 @@ from ...probe.debug_probe import DebugProbe
 from ...debug.svd.loader import SVDFile
 from ...utility.cmdline import convert_reset_type
 from ...debug.sequences.scope import Scope
-from ...debug.sequences.delegates import DebugSequenceDelegate
+from ...debug.sequences.delegates import DebugSequenceDelegate, TraceSetup
 from ...debug.sequences.functions import DebugSequenceCommonFunctions
 from ...debug.sequences.sequences import (Block, DebugSequence, DebugSequenceExecutionContext)
 from ...debug.sequences.default_sequences import (DefaultDebugSequences, _YAMLSequenceParser)
@@ -465,9 +465,16 @@ class CbuildRun:
         return self._vars
 
     @property
-    def debug_sequences_conf(self) -> Dict[str, Any]:
+    def trace_setup(self) -> TraceSetup:
         """@brief Debug sequence configuration."""
-        return self._data.get('debug-sequences-conf', {})
+        conf = self._data.get('debug-sequences-conf') or {}
+        value = conf.get('traceSetup', TraceSetup.LEGACY.value)
+        try:
+            return TraceSetup(value)
+        except ValueError:
+            LOG.warning("Invalid traceSetup value '%s' in debug-sequences-conf; using '%s'",
+                    value, TraceSetup.LEGACY.value)
+            return TraceSetup.LEGACY
 
     @property
     def valid_dps(self) -> List[int]:
@@ -791,7 +798,7 @@ class CbuildRun:
     def trace_mode(self) -> Optional[str]:
         trace = self.debugger.get('trace')
         mode = trace.get('mode') if trace else None
-        if mode in {'server', 'file'} and self.trace_port_type in {'SWO-UART', None}:
+        if mode in {'server', 'file'} and self.trace_port_type in {'swo-uart', None}:
             return mode
         if mode:
             LOG.warning("Trace mode '%s' is not supported; trace will not be enabled", mode)
@@ -801,7 +808,7 @@ class CbuildRun:
     def trace_port_type(self) -> Optional[str]:
         trace = self.debugger.get('trace')
         port_type = trace.get('port-type') if trace else None
-        if port_type in {'SWO-UART', None}:
+        if port_type in {'swo-uart', None}:
             return port_type
         LOG.warning("Trace port type '%s' is not supported; trace will not be enabled", port_type)
         return None
@@ -1246,7 +1253,6 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         self._device = device
         self._cbuild_sequences = CbuildRunSequences(device)
         self._sequences: Set[DebugSequence] = self._cbuild_sequences.sequences
-        self._full_trace_setup = device.debug_sequences_conf.get('fullTraceSetup', False)
         self._debugvars: Optional[Scope] = None
         self._functions = DebugSequenceCommonFunctions()
         self._all_sequences: Optional[Set[DebugSequence]] = None
@@ -1272,9 +1278,9 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         return self._all_sequences
 
     @property
-    def full_trace_setup(self) -> bool:
-        """@brief Returns whether full trace setup is enabled from cbuild-run configuration."""
-        return self._full_trace_setup
+    def trace_setup(self) -> TraceSetup:
+        """@brief Returns the trace setup mode from cbuild-run configuration."""
+        return self._device.trace_setup
 
     @property
     def cmsis_pack_device(self) -> CbuildRun:

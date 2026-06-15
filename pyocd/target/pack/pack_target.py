@@ -30,7 +30,7 @@ from ...core.target import Target
 from ...coresight.ap import APv1Address
 from ...coresight.coresight_target import CoreSightTarget
 from ...coresight.cortex_m import CortexM
-from ...debug.sequences.delegates import DebugSequenceDelegate
+from ...debug.sequences.delegates import DebugSequenceDelegate, TraceSetup
 from ...debug.sequences.functions import DebugSequenceCommonFunctions
 from ...debug.sequences.sequences import (Block, DebugSequence, DebugSequenceExecutionContext)
 from ...debug.sequences.default_sequences import DefaultDebugSequences
@@ -149,7 +149,6 @@ class PackDebugSequenceDelegate(DebugSequenceDelegate):
         self._session = target.session
         self._pack_device = device
         self._sequences: Set[DebugSequence] = device.sequences
-        self._full_trace_setup = device.full_trace_setup
         self._debugvars: Optional[Scope] = None
         self._functions = DebugSequenceCommonFunctions()
         self._all_sequences: Optional[Set[DebugSequence]] = None
@@ -176,9 +175,9 @@ class PackDebugSequenceDelegate(DebugSequenceDelegate):
         return self._all_sequences
 
     @property
-    def full_trace_setup(self) -> bool:
-        """@brief Returns whether full trace setup is enabled."""
-        return self._full_trace_setup
+    def trace_setup(self) -> TraceSetup:
+        """@brief Returns the trace setup mode from pack device."""
+        return self._pack_device.trace_setup
 
     @property
     def cmsis_pack_device(self) -> CmsisPackDevice:

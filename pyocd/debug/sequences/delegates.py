@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from typing import (TYPE_CHECKING, Optional, Set)
 
 from .scope import Scope
@@ -28,6 +29,12 @@ if TYPE_CHECKING:
     from .sequences import (DebugSequence, DebugSequenceExecutionContext, FlashSequenceParams)
     from ...target.pack.cmsis_pack import CmsisPackDevice
 
+class TraceSetup(Enum):
+    """@brief Trace setup modes for debug sequences."""
+    LEGACY = 'legacy'
+    FULL = 'full'
+
+
 class DebugSequenceDelegate:
     """@brief Delegate interface for handling sequence operations."""
 
@@ -37,9 +44,9 @@ class DebugSequenceDelegate:
         raise NotImplementedError()
 
     @property
-    def full_trace_setup(self) -> bool:
-        """@brief Returns whether full trace setup is enabled."""
-        return False
+    def trace_setup(self) -> TraceSetup:
+        """@brief Returns the trace setup mode."""
+        return TraceSetup.LEGACY
 
     @property
     def cmsis_pack_device(self) -> CmsisPackDevice:

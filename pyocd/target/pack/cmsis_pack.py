@@ -32,6 +32,7 @@ from typing import (Any, Callable, Dict, List, IO, Optional, Tuple, TypeVar, Set
 
 from .flash_algo import PackFlashAlgo
 from ...core import exceptions
+from ...debug.sequences.delegates import TraceSetup
 from ...core.memory_map import (
     FlashRegion,
     MemoryMap,
@@ -74,7 +75,7 @@ class _DeviceInfo:
     debugports: List[Element] = field(default_factory=list)
     accessports: List[Element] = field(default_factory=list)
     flashinfo: List[Element] = field(default_factory=list)
-    full_trace_setup: Optional[bool] = None
+    trace_setup: Optional[TraceSetup] = None
 
 @dataclass
 class ProcessorInfo:
@@ -281,8 +282,12 @@ class CmsisPackDescription:
             elif elem.tag == 'debug':
                 newState.debugs.append(elem)
             elif elem.tag == 'sequences':
-                if 'fullTraceSetup' in elem.attrib:
-                    newState.full_trace_setup = _get_bool_attribute(elem, 'fullTraceSetup')
+                if 'traceSetup' in elem.attrib:
+                    value = elem.attrib['traceSetup']
+                    try:
+                        newState.trace_setup = TraceSetup(value)
+                    except ValueError:
+                        LOG.warning("Invalid traceSetup value '%s'; ignoring attribute", value)
                 newState.sequences += elem.findall('sequence')
             elif elem.tag == 'debugvars':
                 newState.debugvars.append(elem)
@@ -313,7 +318,7 @@ class CmsisPackDescription:
                                         debugports=self._extract_debugports(),
                                         accessports=self._extract_accessports(),
                                         flashinfo=self._extract_flashinfo(),
-                                        full_trace_setup=self._extract_full_trace_setup(),
+                                        trace_setup=self._extract_trace_setup(),
                                         )
 
             # Support ._pack being None for testing.
@@ -583,12 +588,12 @@ class CmsisPackDescription:
 
         return self._extract_items('sequences', filter)
 
-    def _extract_full_trace_setup(self) -> bool:
-        """@brief Extract the fullTraceSetup attribute from inherited <sequences> elements."""
-        result = False
+    def _extract_trace_setup(self) -> TraceSetup:
+        """@brief Extract the traceSetup attribute from inherited <sequences> elements."""
+        result = TraceSetup.LEGACY
         for state in self._state_stack:
-            if state.full_trace_setup is not None:
-                result = state.full_trace_setup
+            if state.trace_setup is not None:
+                result = state.trace_setup
         return result
 
     def _extract_debugvars(self) -> List[Element]:
@@ -1222,9 +1227,9 @@ class CmsisPackDevice:
         return self._debugvars
 
     @property
-    def full_trace_setup(self) -> bool:
-        """@brief Whether debug sequences perform full trace setup."""
-        return self._info.full_trace_setup or False
+    def trace_setup(self) -> TraceSetup:
+        """@brief The trace setup mode for debug sequences."""
+        return self._info.trace_setup or TraceSetup.LEGACY
 
     @property
     def valid_dps(self) -> List[int]:

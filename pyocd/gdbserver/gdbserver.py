@@ -24,6 +24,7 @@ from xml.etree.ElementTree import (Element, SubElement, tostring)
 from typing import (Dict, List, Optional, Tuple)
 
 from ..core import exceptions
+from ..core.soc_target import CoreRunStateChange
 from ..core.target import Target
 from ..flash.loader import FlashLoader
 from ..utility.cmdline import convert_vector_catch
@@ -337,6 +338,7 @@ class GDBServer(threading.Thread):
 
         self.packet_size = 2048
         self._is_target_running = (self.target.get_state() == Target.State.RUNNING)
+        self.board.target.core_run_state.set_core_running(self.core, self._is_target_running)
         self.flash_loader = None
         self.shutdown_event = threading.Event()
         if core is None:
@@ -428,13 +430,17 @@ class GDBServer(threading.Thread):
 
     @is_target_running.setter
     def is_target_running(self, value: bool) -> None:
-        if value != self._is_target_running:
-            self._is_target_running = value
-            if self.session.options.get('enable_swv'):
-                if value:
-                    self.board.target.trace_capture()
-                else:
-                    self.board.target.trace_flush()
+        if value == self._is_target_running:
+            return
+
+        state_change = self.board.target.core_run_state.set_core_running(self.core, value)
+        self._is_target_running = value
+
+        if self.session.options.get('enable_swv'):
+            if state_change is CoreRunStateChange.FIRST_CORE_STARTED:
+                self.board.target.trace_capture()
+            elif state_change is CoreRunStateChange.LAST_CORE_STOPPED:
+                self.board.target.trace_flush()
 
     def _init_remote_commands(self):
         """@brief Initialize the remote command processor infrastructure."""

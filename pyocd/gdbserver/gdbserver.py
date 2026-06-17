@@ -167,6 +167,7 @@ class GDBClientSession(threading.Thread):
                         if self.non_stop:
                             self._server.target.halt()
                             self._server.is_target_running = False
+                            self._server.trace_flush()
                             self._server.send_stop_notification(self)
                         else:
                             LOG.warning("Unexpected Ctrl-C ignored in all-stop mode")
@@ -177,6 +178,7 @@ class GDBClientSession(threading.Thread):
                             if self._server.target.get_state() == Target.State.HALTED:
                                 LOG.debug("Target halted")
                                 self._server.is_target_running = False
+                                self._server.trace_flush()
                                 self._server.send_stop_notification(self)
                         except Exception as e:
                             LOG.error("Unexpected exception: %s", e, exc_info=self._server.session.log_tracebacks)
@@ -337,8 +339,8 @@ class GDBServer(threading.Thread):
                 ])
 
         self.packet_size = 2048
-        self._is_target_running = (self.target.get_state() == Target.State.RUNNING)
-        self.board.target.core_run_state.set_core_running(self.core, self._is_target_running)
+        self.is_target_running = (self.target.get_state() == Target.State.RUNNING)
+        self.board.target.core_run_state.set_core_running(self.core, self.is_target_running)
         self.flash_loader = None
         self.shutdown_event = threading.Event()
         if core is None:
@@ -424,23 +426,15 @@ class GDBServer(threading.Thread):
 
         # pylint: enable=invalid-name
 
-    @property
-    def is_target_running(self) -> bool:
-        return self._is_target_running
+    def trace_flush(self) -> None:
+        state_change = self.board.target.core_run_state.set_core_running(self.core, False)
+        if state_change is CoreRunStateChange.LAST_CORE_STOPPED and self.session.options.get('enable_swv'):
+            self.board.target.trace_flush()
 
-    @is_target_running.setter
-    def is_target_running(self, value: bool) -> None:
-        if value == self._is_target_running:
-            return
-
-        state_change = self.board.target.core_run_state.set_core_running(self.core, value)
-        self._is_target_running = value
-
-        if self.session.options.get('enable_swv'):
-            if state_change is CoreRunStateChange.FIRST_CORE_STARTED:
-                self.board.target.trace_capture()
-            elif state_change is CoreRunStateChange.LAST_CORE_STOPPED:
-                self.board.target.trace_flush()
+    def trace_capture(self) -> None:
+        state_change = self.board.target.core_run_state.set_core_running(self.core, True)
+        if state_change is CoreRunStateChange.FIRST_CORE_STARTED and self.session.options.get('enable_swv'):
+            self.board.target.trace_capture()
 
     def _init_remote_commands(self):
         """@brief Initialize the remote command processor infrastructure."""
@@ -530,6 +524,7 @@ class GDBServer(threading.Thread):
                     # Make sure the target is halted. Otherwise gdb gets easily confused.
                     self.target.halt()
                     self.is_target_running = False
+                    self.trace_flush()
 
                     # Start the per-client handler thread (server.run_session() will be invoked there).
                     client.start()
@@ -591,8 +586,11 @@ class GDBServer(threading.Thread):
                 try:
                     # First check if it's halted
                     if self.target.get_state() == Target.State.HALTED:
+                        # If the target is halted, flush the trace capture buffer.
                         self.is_target_running = False
-                        self.is_target_running = True
+                        self.trace_flush()
+                        # Start trace capture before resuming.
+                        self.trace_capture()
                         self.target.resume()
                 except Exception as e:
                     LOG.error("Error resuming target after client detached: %s",
@@ -806,8 +804,9 @@ class GDBServer(threading.Thread):
             else:
                 LOG.debug("Command: Continue")
 
-        self.is_target_running = True
+        self.trace_capture()
         self.target.resume()
+        self.is_target_running = True
         LOG.debug("Target resumed")
 
         if self.first_run_after_reset_or_flash:
@@ -839,6 +838,7 @@ class GDBServer(threading.Thread):
                 try:
                     self.target.halt()
                     self.is_target_running = False
+                    self.trace_flush()
                     val = self.get_t_response(client, forceSignal=signals.SIGINT)
                 except exceptions.TransferError as e:
                     # Note: if the target is not actually halted, gdb can get confused from this point on.
@@ -878,6 +878,7 @@ class GDBServer(threading.Thread):
                             continue
 
                     self.is_target_running = False
+                    self.trace_flush()
                     pc = self.target_context.read_core_register('pc')
                     LOG.debug("Target halted at pc=0x%08x", pc)
                     val = self.get_t_response(client)
@@ -919,9 +920,9 @@ class GDBServer(threading.Thread):
         def step_hook():
             # Note we don't clear the interrupt event here!
             return client.is_interrupted()
-        self.is_target_running = True
+        self.trace_capture()
         self.target.step(not self.step_into_interrupt, start, end, hook_cb=step_hook)
-        self.is_target_running = False
+        self.trace_flush()
 
         # Clear and handle an interrupt.
         if client.is_interrupted():
@@ -1006,8 +1007,9 @@ class GDBServer(threading.Thread):
         if thread_actions[currentThread][0:1] in (b'c', b'C'):
             LOG.debug("Command: vCont (threadId=0x%08x, action=continue)", currentThread)
             if client.non_stop:
-                self.is_target_running = True
+                self.trace_capture()
                 self.target.resume()
+                self.is_target_running = True
                 return self.create_rsp_packet(b"OK")
             else:
                 return self.resume(client, None)
@@ -1021,9 +1023,9 @@ class GDBServer(threading.Thread):
                 LOG.debug("Command: vCont (threadId=0x%08x, action=step)", currentThread)
 
             if client.non_stop:
-                self.is_target_running = True
+                self.trace_capture()
                 self.target.step(not self.step_into_interrupt, start, end)
-                self.is_target_running = False
+                self.trace_flush()
                 client.send(self.create_rsp_packet(b"OK"))
                 self.send_stop_notification(client)
                 return None
@@ -1037,6 +1039,7 @@ class GDBServer(threading.Thread):
             client.send(self.create_rsp_packet(b"OK"))
             self.target.halt()
             self.is_target_running = False
+            self.trace_flush()
             self.send_stop_notification(client, forceSignal=0)
         else:
             LOG.error("Command: vCont (threadId=0x%08x, action='%s'): Unsupported action", currentThread, to_str_safe(thread_actions[currentThread]))

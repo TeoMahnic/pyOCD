@@ -31,6 +31,7 @@ from ..utility.cmdline import (
     )
 from ..probe.shared_probe_proxy import SharedDebugProbeProxy
 from ..gdbserver import GDBServer
+from ..trace.swv import SWVReader
 from ..probe.tcp_probe_server import DebugProbeServer
 from ..coresight.generic_mem_ap import GenericMemAPTarget
 from ..utility.notification import Notification
@@ -222,6 +223,17 @@ class GdbserverSubcommand(SubcommandBase):
                 if session.options.get('enable_swv'):
                     session.target.trace_start()
 
+                # Initialize SWV reader before any GDB activity.
+                swv_reader = None
+                if session.options.get("enable_swv"):
+                    if "swv_system_clock" not in session.options:
+                        LOG.warning("SWV not enabled; swv_system_clock option missing")
+                    else:
+                        sys_clock = int(session.options.get("swv_system_clock"))
+                        swo_clock = int(session.options.get("swv_clock"))
+                        swv_reader = SWVReader(session)
+                        swv_reader.init(sys_clock, swo_clock, sys.stdout)
+
                 # Reset and run the target
                 if self._args.reset_run:
                     session.board.target.reset()
@@ -252,6 +264,9 @@ class GdbserverSubcommand(SubcommandBase):
                 server.stop()
             if probe_server:
                 probe_server.stop()
+            if swv_reader:
+                swv_reader.stop()
+                swv_reader = None
         finally:
             if session.options.get('enable_swv'):
                 session.target.trace_stop()

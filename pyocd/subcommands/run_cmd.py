@@ -123,8 +123,6 @@ class RunSubcommand(SubcommandBase):
             else:
                 self._systemview = None
             try:
-                if session.options.get('enable_swv'):
-                    session.target.trace_start()
                 # Start up the run servers
                 for core_number, core in session.board.target.cores.items():
                     # Don't create a server for CPU-less memory Access Port
@@ -139,6 +137,8 @@ class RunSubcommand(SubcommandBase):
                                            shutdown_event=self.shared_shutdown)
                     self._run_servers.append(run_server)
 
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
                 # Initialize SWVReader with the primary core's stdio handler so that
                 # SWV output is routed through the same channel as semihosting.
                 if session.options.get("enable_swv"):

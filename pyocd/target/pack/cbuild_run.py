@@ -1211,6 +1211,7 @@ class CbuildRunSequences(_YAMLSequenceParser):
 
         self._debugvars: Optional[Block] = None
         self._debugvars_conf: Optional[Block] = None
+        self._debugvars_set: Optional[Block] = None
         self._sequences: Set[DebugSequence] = set()
 
     @property
@@ -1231,6 +1232,14 @@ class CbuildRunSequences(_YAMLSequenceParser):
                 dbgconf_file = str(file_path.resolve())
             self._debugvars_conf = self._dbgconf_variables(dbgconf_file)
         return self._debugvars_conf
+
+    @property
+    def variables_set(self) -> Optional[Block]:
+        if self._debugvars_set is None:
+            variables_set = self._cbuild_debugger.get('debug-vars-set')
+            if variables_set is not None:
+                self._debugvars_set = Block(variables_set, info='debug-vars-set')
+        return self._debugvars_set
 
     @property
     def sequences(self) -> Set[DebugSequence]:
@@ -1325,6 +1334,12 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
         if debugvars_conf_block is not None:
             with context.push(debugvars_conf_block, self._debugvars):
                 debugvars_conf_block.execute(context)
+
+        # Override debugvars with values from the 'debug-vars-set' node in *.cbuild-run.yml
+        debug_vars_set = self._cbuild_sequences.variables_set
+        if debug_vars_set is not None:
+            with context.push(debug_vars_set, self._debugvars):
+                debug_vars_set.execute(context)
 
         # Make all vars read-only.
         self._debugvars.freeze()

@@ -31,6 +31,7 @@ from ..core.target import Target
 from ..core import exceptions
 from ..probe.debug_probe import DebugProbe
 from ..utility.server import StreamServer
+from ..debug.sequences.delegates import TraceSetup
 
 if TYPE_CHECKING:
     from ..core.session import Session
@@ -99,6 +100,10 @@ class SWVReader(threading.Thread):
         assert target
         self._target = target
         self._core = target.cores[core_number]
+        if target.debug_sequence_delegate is not None:
+            self._trace_setup = target.debug_sequence_delegate.trace_setup
+        else:
+            self._trace_setup = TraceSetup.LEGACY
 
         self._session.subscribe(self._reset_handler, Target.Event.POST_RESET, self._core)
 
@@ -128,24 +133,25 @@ class SWVReader(threading.Thread):
             LOG.warning(f"SWV not initalized: Probe {self._session.probe.unique_id} does not support SWO")
             return False
 
-        itm = self._target.get_first_child_of_type(ITM)
-        if not itm:
-            LOG.warning("SWV not initalized: Target does not have ITM component")
-            return False
-        tpiu = self._target.get_first_child_of_type(TPIU, 'has_swo_uart')
-        if not tpiu:
-            LOG.warning("SWV not initalized: Target does not have TPIU component with SWO UART mode")
-            return False
+        if self._trace_setup == TraceSetup.LEGACY:
+            itm = self._target.get_first_child_of_type(ITM)
+            if not itm:
+                LOG.warning("SWV not initalized: Target does not have ITM component")
+                return False
+            tpiu = self._target.get_first_child_of_type(TPIU, 'has_swo_uart')
+            if not tpiu:
+                LOG.warning("SWV not initalized: Target does not have TPIU component with SWO UART mode")
+                return False
 
-        itm.init()
-        itm.enable()
-        tpiu.init()
+            itm.init()
+            itm.enable()
+            tpiu.init()
 
-        if tpiu.set_swo_clock(swo_clock, sys_clock):
-            LOG.info("Set SWO clock to %d", swo_clock)
-        else:
-            LOG.warning("SWV not initalized: Failed to set SWO clock rate")
-            return False
+            if tpiu.set_swo_clock(swo_clock, sys_clock):
+                LOG.info("Set SWO clock to %d", swo_clock)
+            else:
+                LOG.warning("SWV not initalized: Failed to set SWO clock rate")
+                return False
 
         self._parser = SWOParser(self._core)
         self._sink = SWVEventSink(console)
@@ -169,10 +175,11 @@ class SWVReader(threading.Thread):
         self._shutdown_event.set()
         self.join()
 
-        # init() should never have started the SWV thread unless the target has ITM and TPIU.
-        itm = self._target.get_first_child_of_type(ITM)
-        assert itm
-        itm.disable()
+        if self._trace_setup == TraceSetup.LEGACY:
+            # init() should never have started the SWV thread unless the target has ITM and TPIU.
+            itm = self._target.get_first_child_of_type(ITM)
+            assert itm
+            itm.disable()
 
     def run(self) -> None:
         """@brief SWV reader thread routine.

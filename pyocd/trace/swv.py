@@ -232,7 +232,8 @@ class SWVReader(threading.Thread):
         """@brief Reset notification handler.
 
         If the target is reset while the SWV reader is running, then the Target::trace_start()
-        method is called to reinit trace output.
+        and Target::trace_capture() methods are called to reinit trace output.
         """
         if self.is_alive():
             self._target.trace_start()
+            self._target.trace_capture()

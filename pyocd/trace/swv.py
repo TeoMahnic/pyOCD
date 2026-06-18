@@ -137,8 +137,6 @@ class SWVReader(threading.Thread):
             LOG.warning("SWV not initalized: Target does not have TPIU component with SWO UART mode")
             return False
 
-        self._target.trace_start()
-
         itm.init()
         itm.enable()
         tpiu.init()
@@ -175,8 +173,6 @@ class SWVReader(threading.Thread):
         itm = self._target.get_first_child_of_type(ITM)
         assert itm
         itm.disable()
-
-        self._target.trace_stop()
 
     def run(self) -> None:
         """@brief SWV reader thread routine.

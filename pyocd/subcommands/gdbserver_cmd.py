@@ -1,6 +1,6 @@
 # pyOCD debugger
 # Copyright (c) 2021 Chris Reed
-# Copyright (c) 2025 Arm Limited
+# Copyright (c) 2025-2026 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -219,6 +219,9 @@ class GdbserverSubcommand(SubcommandBase):
                     session.probeserver = probe_server
                     probe_server.start()
 
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
+
                 # Reset and run the target
                 if self._args.reset_run:
                     session.board.target.reset()
@@ -249,6 +252,9 @@ class GdbserverSubcommand(SubcommandBase):
                 server.stop()
             if probe_server:
                 probe_server.stop()
+        finally:
+            if session.options.get('enable_swv'):
+                session.target.trace_stop()
             raise
 
         return 0

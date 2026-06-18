@@ -136,6 +136,9 @@ class RunSubcommand(SubcommandBase):
                                            shutdown_event=self.shared_shutdown)
                     self._run_servers.append(run_server)
 
+                if session.options.get('enable_swv'):
+                    session.target.trace_start()
+
                 # Reset the target and start RunServers
                 session.target.reset()
                 for run_server in self._run_servers:
@@ -163,6 +166,9 @@ class RunSubcommand(SubcommandBase):
                 LOG.exception("Unhandled exception in 'run' subcommand")
                 self.shutdown()
                 return 1
+            finally:
+                if session.options.get('enable_swv'):
+                    session.target.trace_stop()
 
             if timelimit_triggered:
                 return 0

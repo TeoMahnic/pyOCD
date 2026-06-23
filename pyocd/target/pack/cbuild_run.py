@@ -1211,7 +1211,7 @@ class CbuildRunSequences(_YAMLSequenceParser):
 
         self._debugvars: Optional[Block] = None
         self._debugvars_conf: Optional[Block] = None
-        self._debugvars_set: Optional[Block] = None
+        self._device_settings: Optional[Block] = None
         self._sequences: Set[DebugSequence] = set()
 
     @property
@@ -1234,12 +1234,13 @@ class CbuildRunSequences(_YAMLSequenceParser):
         return self._debugvars_conf
 
     @property
-    def variables_set(self) -> Optional[Block]:
-        if self._debugvars_set is None:
-            variables_set = self._cbuild_debugger.get('debug-vars-set')
-            if variables_set is not None:
-                self._debugvars_set = Block(variables_set, info='debug-vars-set')
-        return self._debugvars_set
+    def device_settings(self) -> Optional[Block]:
+        if self._device_settings is None:
+            _device_settings = self._cbuild_debugger.get('device-settings') or {}
+            settings = "".join(f"{key} = {value};\n" for key, value in _device_settings.items())
+            if settings:
+                self._device_settings = Block(settings, info='device-settings')
+        return self._device_settings
 
     @property
     def sequences(self) -> Set[DebugSequence]:
@@ -1329,17 +1330,18 @@ class CbuildRunDebugSequenceDelegate(DebugSequenceDelegate):
             with context.push(debugvars_block, self._debugvars):
                 debugvars_block.execute(context)
 
-        # Override default debugvars with values from *.dbgconf file.
-        debugvars_conf_block = self._cbuild_sequences.dbgconf_variables
-        if debugvars_conf_block is not None:
-            with context.push(debugvars_conf_block, self._debugvars):
-                debugvars_conf_block.execute(context)
-
-        # Override debugvars with values from the 'debug-vars-set' node in *.cbuild-run.yml
-        debug_vars_set = self._cbuild_sequences.variables_set
-        if debug_vars_set is not None:
-            with context.push(debug_vars_set, self._debugvars):
-                debug_vars_set.execute(context)
+        # if `device-settings:` is present then an also specified `*.dbgconf` file is ignored.
+        device_settings_block = self._cbuild_sequences.device_settings
+        if device_settings_block is not None:
+            # Override debugvars with values from the 'device-settings' node in *.cbuild-run.yml
+            with context.push(device_settings_block, self._debugvars):
+                device_settings_block.execute(context)
+        else:
+            # Override default debugvars with values from *.dbgconf file.
+            debugvars_conf_block = self._cbuild_sequences.dbgconf_variables
+            if debugvars_conf_block is not None:
+                with context.push(debugvars_conf_block, self._debugvars):
+                    debugvars_conf_block.execute(context)
 
         # Make all vars read-only.
         self._debugvars.freeze()

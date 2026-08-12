@@ -136,12 +136,10 @@ class _CTraceRunParser:
             raise CTraceRunError("Cannot access *.ctrace-run.yml file: no path provided")
         self._path = Path(yml_path).expanduser().resolve()
         self._digest: Optional[bytes] = None
-        self._content_digest: Optional[bytes] = None
         self._data: Optional[_CTraceRunData] = None
 
     def load(self, force: bool = False) -> Optional[Tuple[bytes, _CTraceRunData]]:
         """Read and parse the file if its content has changed."""
-        self._content_digest = None
         try:
             yml_content = self._path.read_bytes()
         except FileNotFoundError:
@@ -154,7 +152,6 @@ class _CTraceRunParser:
                 f"Cannot access *.ctrace-run.yml file '{self._path}': {err.strerror}") from err
 
         digest = hashlib.sha256(yml_content).digest()
-        self._content_digest = digest
         if not force and digest == self._digest and self._data is not None:
             return digest, self._data
 
@@ -305,7 +302,7 @@ class CTraceRun:
 
     def __init__(self, session: "Session") -> None:
         self._last_applied_digest: Optional[bytes] = None
-        self._last_error: Optional[Tuple[Optional[bytes], str]] = None
+        self._last_error: Optional[str] = None
 
         cbuild_run = session.cbuild_run
         if cbuild_run is None or cbuild_run.trace.get('mode', 'off') == 'off':
@@ -359,12 +356,12 @@ class CTraceRun:
             self._report_error(err)
 
     def _report_error(self, error: exceptions.Error) -> None:
-        error_key = (self._parser._content_digest, str(error))
-        if error_key == self._last_error:
+        error_message = str(error)
+        if error_message == self._last_error:
             LOG.debug("Failed to apply ctrace-run configuration: %s", error)
         else:
             LOG.error("Failed to apply ctrace-run configuration: %s", error)
-            self._last_error = error_key
+            self._last_error = error_message
 
     def _apply_to_target(self, target: "SoCTarget", data: _CTraceRunData) -> None:
         access_targets = self._resolve_access_targets(target, data.references)

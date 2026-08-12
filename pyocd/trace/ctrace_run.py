@@ -329,14 +329,10 @@ class CTraceRun:
         trace_root = (Path(project_path).expanduser().resolve() if project_path else source_path.parent)
         self._parser = _CTraceRunParser(trace_root / '.trace' / f"{base_name}.ctrace-run.yml")
 
-    def apply(self, target: "SoCTarget", force: bool = False) -> bool:
-        """Apply the file if it changed, returning whether it was applied."""
-        if force:
-            self._last_applied_digest = None
-            self._last_error = None
-
+    def apply(self, target: "SoCTarget") -> bool:
+        """Apply changed configuration and return whether the file changed."""
         try:
-            loaded = self._parser.load(force)
+            loaded = self._parser.load()
             if loaded is None:
                 self._last_applied_digest = None
                 self._last_error = None
@@ -354,9 +350,13 @@ class CTraceRun:
             self._report_error(err)
             return False
 
-    def reload(self, target: "SoCTarget") -> bool:
-        """Reload and reapply the file even if it has not changed."""
-        return self.apply(target, force=True)
+    def reload(self) -> None:
+        """Reload and validate the file without applying it to the target."""
+        try:
+            self._parser.load(force=True)
+            self._last_error = None
+        except exceptions.Error as err:
+            self._report_error(err)
 
     def _report_error(self, error: exceptions.Error) -> None:
         error_key = (self._parser._content_digest, str(error))

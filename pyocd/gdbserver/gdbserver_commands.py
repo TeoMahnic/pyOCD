@@ -134,7 +134,7 @@ class CTraceRunCommand(CommandBase):
             'category': 'trace',
             'nargs': 1,
             'usage': "reload",
-            'help': "Reload and reapply the ctrace-run configuration.",
+            'help': "Reload the ctrace-run configuration for the next trace capture.",
             }
 
     def parse(self, args):
@@ -146,10 +146,8 @@ class CTraceRunCommand(CommandBase):
         if ctrace_run is None:
             raise exceptions.CommandError("ctrace-run support is not enabled")
 
-        if ctrace_run.reload(self.context.target):
-            self.context.write("ctrace-run configuration reloaded")
-        else:
-            self.context.write("ctrace-run configuration was not applied")
+        ctrace_run.reload()
+        self.context.write("ctrace-run configuration reloaded for the next trace capture")
 
 class RTTCommand(CommandBase):
     INFO = {

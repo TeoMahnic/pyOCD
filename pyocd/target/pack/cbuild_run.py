@@ -654,10 +654,8 @@ class CbuildRun:
         """@brief STDIO mode assignments from debugger section.
             The method will not be called frequently, so performance is not critical.
         """
-        SUPPORTED_MODES = { 'off', 'server', 'file', 'console' }
-        MODE_ALIASES = { False: 'off',
-                        'monitor': 'server'
-                       }
+        SUPPORTED_MODES = {'off', 'server', 'file', 'console'}
+        MODE_ALIASES = {False: 'off', 'monitor': 'server'}
         # Get STDIO configuration from debugger section
         stdio_config = self._get_stdio_config()
         valid_config = any('mode' in s for s in stdio_config)
@@ -792,8 +790,8 @@ class CbuildRun:
         """@brief Trace configuration from debugger section.
             The method will not be called frequently, so performance is not critical.
         """
-        SUPPORTED_MODES = { 'off', 'server', 'file' }
-        MODE_ALIASES = { False: 'off'}
+        SUPPORTED_MODES = {'off', 'server', 'file'}
+        MODE_ALIASES = {False: 'off'}
         trace = self.debugger.get('trace') or []
 
         trace_config = {}

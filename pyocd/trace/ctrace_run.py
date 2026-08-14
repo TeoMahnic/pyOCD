@@ -345,11 +345,20 @@ class CTraceRun:
     def reload(self) -> bool:
         """Reload and validate the file without applying it to the target."""
         try:
-            self._parser.load(force=True)
+            reloaded = self._parser.load(force=True)
+            if reloaded is None:
+                return False
+            self.invalidate()
         except exceptions.Error as err:
             self._report_error(err)
             return False
         return True
+
+    def invalidate(self) -> None:
+        """Invalidate the last applied configuration, so that it will be reapplied on the next call to apply()."""
+        # TODO: Subscribe to TRACE_RESTART event
+        self._last_applied_digest = None
+        self._last_error = None
 
     def _report_error(self, error: exceptions.Error) -> None:
         error_message = str(error)

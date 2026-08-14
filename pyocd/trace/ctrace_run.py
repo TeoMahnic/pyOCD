@@ -148,8 +148,7 @@ class _CTraceRunParser:
             self._data = None
             return None
         except OSError as err:
-            raise CTraceRunError(
-                f"Cannot access *.ctrace-run.yml file '{self._path}': {err.strerror}") from err
+            raise CTraceRunError(f"Cannot access *.ctrace-run.yml file '{self._path}': {err.strerror}") from err
 
         digest = hashlib.sha256(yml_content).digest()
         if not force and digest == self._digest and self._data is not None:
@@ -347,13 +346,14 @@ class CTraceRun:
             self._report_error(err)
             return False
 
-    def reload(self) -> None:
+    def reload(self) -> bool:
         """Reload and validate the file without applying it to the target."""
         try:
             self._parser.load(force=True)
-            self._last_error = None
         except exceptions.Error as err:
             self._report_error(err)
+            return False
+        return True
 
     def _report_error(self, error: exceptions.Error) -> None:
         error_message = str(error)

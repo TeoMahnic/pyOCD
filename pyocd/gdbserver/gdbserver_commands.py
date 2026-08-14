@@ -146,8 +146,11 @@ class CTraceRunCommand(CommandBase):
         if ctrace_run is None:
             raise exceptions.CommandError("ctrace-run support is not enabled")
 
-        ctrace_run.reload()
-        self.context.write("ctrace-run configuration reloaded for the next trace capture")
+        reloaded = ctrace_run.reload()
+        if reloaded:
+            self.context.write("ctrace-run configuration reloaded")
+        else:
+            self.context.write("ctrace-run configuration was not applied")
 
 class RTTCommand(CommandBase):
     INFO = {

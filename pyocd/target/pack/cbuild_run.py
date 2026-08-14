@@ -411,6 +411,13 @@ class CbuildRun:
         return self._data.get('device-pack-path', '')
 
     @property
+    def solution_set(self) -> str:
+        """@brief Combined name of the <solution>+<target-type>@<target-set>."""
+        target_set = self._data.get('target-set')
+        solution_set = f"{self._cbuild_name}@{target_set}" if target_set else self._cbuild_name
+        return solution_set
+
+    @property
     def svd(self) -> Optional[str]:
         """@brief Path to the SVD file for the target device."""
         #TODO handle multicore devices
@@ -817,9 +824,9 @@ class CbuildRun:
                 trace_config['server-port'] = t.get('server-port', 5555)
             elif mode == 'file':
                 if type_node == 'swo-uart':
-                    trace_config['file'] = t.get('file', f"{self.proj_path}/.trace/{self._cbuild_name}.SWO.raw")
+                    trace_config['file'] = t.get('file', f"{self.proj_path}/.trace/{self.solution_set}.SWO.raw")
                 else:
-                    trace_config['file'] = t.get('file', f"{self.proj_path}/.trace/{self._cbuild_name}.TB.raw")
+                    trace_config['file'] = t.get('file', f"{self.proj_path}/.trace/{self.solution_set}.TB.raw")
             if type_node == 'swo-uart' and mode != 'off' and t.get('input-clock') is None:
                 LOG.warning("Trace input clock not specified in cbuild-run; trace will not be enabled")
                 mode = 'off'

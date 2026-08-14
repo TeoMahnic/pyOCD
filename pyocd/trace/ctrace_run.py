@@ -317,13 +317,9 @@ class CTraceRun:
         if not source_name.lower().endswith(suffix):
             raise CTraceRunError(f"Cannot derive ctrace-run name from cbuild-run file '{cbuild_run_path}'")
 
-        base_name = source_name[:-len(suffix)]
-        if not base_name:
-            raise CTraceRunError(f"Cannot derive ctrace-run name from cbuild-run file '{cbuild_run_path}'")
-
         project_path = cbuild_run.proj_path if cbuild_run.proj_path_name else None
         trace_root = (Path(project_path).expanduser().resolve() if project_path else source_path.parent)
-        self._parser = _CTraceRunParser(trace_root / '.trace' / f"{base_name}.ctrace-run.yml")
+        self._parser = _CTraceRunParser(trace_root / '.trace' / f"{cbuild_run.solution_set}.ctrace-run.yml")
 
     def apply(self, target: "SoCTarget") -> bool:
         """Apply changed configuration and return whether the file changed."""

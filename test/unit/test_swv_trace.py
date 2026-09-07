@@ -23,7 +23,8 @@ from pyocd.core import exceptions
 from pyocd.core.session import Session
 from pyocd.debug.sequences.delegates import TraceSetup
 from pyocd.probe.debug_probe import DebugProbe
-from pyocd.trace.sink import TraceDataSink
+from pyocd.target.pack.cbuild_run import TraceSink
+from pyocd.trace.sink import (TraceBufferSinks, TraceDataSink)
 from pyocd.trace.swv import SWVReader
 from pyocd.utility.notification import Notification
 
@@ -158,6 +159,16 @@ class TestRawTraceFile:
         assert not reader._raw_output.is_open
         assert "Failed to open SWV raw output" in caplog.text
 
+    def test_capture_creates_trace_output_directory(self, tmp_path):
+        raw_path = tmp_path / ".trace" / "trace.raw"
+        reader, _, _ = make_reader(raw_path)
+
+        notify(reader, Session.Event.TRACE_DATA_CAPTURE, True)
+        write_raw_data(reader, b'trace')
+        notify(reader, Session.Event.TRACE_DATA_FLUSH)
+
+        assert raw_path.read_bytes() == b'trace'
+
     def test_capture_without_output_filename_is_a_no_op(self):
         reader, _, _ = make_reader()
 
@@ -180,6 +191,67 @@ class TestRawTraceFile:
         assert reader._raw_output is not None
         assert not reader._raw_output.is_open
         assert "Failed to update SWV raw output file" in caplog.text
+
+
+class TestTraceBufferSinks:
+    def make_session(self):
+        return SimpleNamespace(
+            options={'serve_local_only': True},
+            Event=Session.Event,
+            subscribe=mock.Mock(),
+            unsubscribe=mock.Mock(),
+        )
+
+    def test_server_starts_when_outputs_are_initialized(self):
+        session = self.make_session()
+        trace_buffer = TraceSink('trace-buffer', 'etr', 'server', server_port=5555)
+
+        with mock.patch('pyocd.trace.sink.StreamServer') as stream_server:
+            outputs = TraceBufferSinks(session, {'etr': trace_buffer})
+
+        stream_server.assert_called_once_with(
+            5555,
+            serve_local_only=True,
+            name='Trace buffer etr raw',
+            is_read_only=True,
+        )
+        outputs.shutdown()
+
+    def test_file_output_creates_trace_directory(self, tmp_path):
+        session = self.make_session()
+        raw_path = tmp_path / '.trace' / 'trace.raw'
+        trace_buffer = TraceSink('trace-buffer', 'etr', 'file', file=str(raw_path))
+        outputs = TraceBufferSinks(session, {'etr': trace_buffer})
+
+        outputs._trace_data_handler(Notification(Session.Event.TRACE_DATA_CAPTURE, session, True))
+        assert outputs.write('etr', b'trace') == 5
+        outputs._trace_data_handler(Notification(Session.Event.TRACE_DATA_FLUSH, session))
+
+        assert raw_path.read_bytes() == b'trace'
+        outputs.shutdown()
+
+    def test_failed_capture_output_is_not_cached(self):
+        session = self.make_session()
+        trace_buffer = TraceSink('trace-buffer', 'etr', 'file', file='trace.raw')
+        initial_output = mock.Mock()
+        initial_output.start_capture.side_effect = OSError('first failure')
+        failed_output = mock.Mock()
+        failed_output.start_capture.side_effect = OSError('second failure')
+        working_output = mock.Mock()
+        working_output.write.return_value = 4
+
+        with mock.patch(
+                'pyocd.trace.sink.TraceDataSink',
+                side_effect=[initial_output, failed_output, working_output],
+                ) as trace_data_sink:
+            outputs = TraceBufferSinks(session, {'etr': trace_buffer})
+            outputs._trace_data_handler(Notification(Session.Event.TRACE_DATA_CAPTURE, session, True))
+            with pytest.raises(ValueError, match="failed to write trace buffer 'etr'"):
+                outputs.write('etr', b'data')
+            assert outputs.write('etr', b'data') == 4
+
+        assert trace_data_sink.call_count == 3
+        outputs.shutdown()
 
 
 class TestTraceSetup:

@@ -221,7 +221,7 @@ class Session(Notifier):
                 self._cbuild_run = CbuildRun(self.options.get('cbuild_run'))
                 cbuild_run_config = self._get_cbuild_run_config(command)
                 self._options.add_back(cbuild_run_config)
-                if cbuild_run_config.get('enable_swv'):
+                if self.cbuild_run is not None and self.cbuild_run.trace.enabled:
                     try:
                         self._ctrace_run = CTraceRun(self)
                     except (exceptions.Error, OSError) as err:
@@ -317,16 +317,16 @@ class Session(Notifier):
         debugger_options['systemview_auto_start'] = self.cbuild_run.systemview_auto_start
         debugger_options['systemview_auto_stop'] = self.cbuild_run.systemview_auto_stop
 
-        trace = self.cbuild_run.trace
-        if trace.get('mode', 'off') != 'off':
+        swo_uart = self.cbuild_run.trace.swo_uart
+        if swo_uart is not None and swo_uart.enabled:
             debugger_options['enable_swv'] = True
-            debugger_options['swv_system_clock'] = trace.get('input-clock')
-            debugger_options['swv_clock'] = trace.get('output-clock')
+            debugger_options['swv_system_clock'] = swo_uart.input_clock
+            debugger_options['swv_clock'] = swo_uart.output_clock
             debugger_options['swv_raw_enable'] = True
-            if trace.get('mode') == 'file':
-                debugger_options['swv_raw_file'] = trace.get('file')
-            elif trace.get('mode') == 'server':
-                debugger_options['swv_raw_port'] = trace.get('server-port')
+            if swo_uart.mode == 'file':
+                debugger_options['swv_raw_file'] = swo_uart.file
+            elif swo_uart.mode == 'server':
+                debugger_options['swv_raw_port'] = swo_uart.server_port
 
         # Set reset types for load operations.
         debugger_options['load.pre_reset'] = self.cbuild_run.pre_reset
@@ -631,7 +631,7 @@ class Session(Notifier):
         if self._trace_started:
             return
 
-        if self.target is not None:
+        if self.target is not None and self.target.trace_enabled:
             self.target.trace_start()
             self._trace_started = True
             self.subscribe(self._reset_handler, Target.Event.POST_RESET)
@@ -688,8 +688,7 @@ class Session(Notifier):
             if init_board:
                 self._board.init()
                 self._inited = True
-                if self.options.get('enable_swv'):
-                    self._trace_start()
+                self._trace_start()
 
     def disconnect(self) -> None:
         """@brief Disconnect the session without closing the probe.

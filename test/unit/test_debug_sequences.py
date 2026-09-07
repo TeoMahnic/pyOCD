@@ -26,6 +26,7 @@ from lark.tree import Tree as LarkTree
 from pyocd.core import exceptions
 from pyocd.debug.sequences.scope import Scope
 from pyocd.debug.sequences.sequences import (
+    DebugSequenceRuntimeError,
     DebugSequenceSemanticError,
     DebugSequenceExecutionContext,
     DebugSequence,
@@ -38,6 +39,7 @@ from pyocd.debug.sequences.sequences import (
 )
 from pyocd.core.session import Session
 from pyocd.probe.debug_probe import DebugProbe
+from pyocd.debug.sequences.functions import DebugSequenceCommonFunctions
 
 # Substitute for SequenceFunctionDelegate for testing.
 class SequenceFunctionsDelegateForTesting:
@@ -110,6 +112,28 @@ class SequenceDelegateForTesting:
 class MockProbe:
     def __init__(self):
         self.wire_protocol = DebugProbe.Protocol.SWD
+
+
+class TestTraceBufferSelected:
+    def test_rejects_empty_name_with_multiple_buffers(self):
+        context = mock.Mock()
+        context.delegate.trace_buffers = {
+            'ETB': mock.Mock(enabled=True),
+            'MTB': mock.Mock(enabled=True),
+        }
+
+        with mock.patch.object(DebugSequenceCommonFunctions, 'context',
+                               new_callable=mock.PropertyMock, return_value=context):
+            with pytest.raises(DebugSequenceRuntimeError, match="Empty trace buffer name is ambiguous"):
+                DebugSequenceCommonFunctions().tracebufferselected('')
+
+    def test_accepts_single_unnamed_buffer(self):
+        context = mock.Mock()
+        context.delegate.trace_buffers = {'': mock.Mock(enabled=True)}
+
+        with mock.patch.object(DebugSequenceCommonFunctions, 'context',
+                               new_callable=mock.PropertyMock, return_value=context):
+            assert DebugSequenceCommonFunctions().tracebufferselected('') == 1
 
 @pytest.fixture(scope='function')
 def session():

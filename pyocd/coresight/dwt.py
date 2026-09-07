@@ -1,5 +1,5 @@
 # pyOCD debugger
-# Copyright (c) 2015-2019 Arm Limited
+# Copyright (c) 2015-2019,2026 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,13 +73,13 @@ class DWT(CoreSightComponent):
     DWT_CTRL_CYCCNTENA_MASK = (1 << 0)
 
     WATCH_TYPE_TO_FUNCT = {
-                            Target.WatchpointType.READ: 5,
-                            Target.WatchpointType.WRITE: 6,
-                            Target.WatchpointType.READ_WRITE: 7,
-                            5: Target.WatchpointType.READ,
-                            6: Target.WatchpointType.WRITE,
-                            7: Target.WatchpointType.READ_WRITE,
-                            }
+        Target.WatchpointType.READ: 5,
+        Target.WatchpointType.WRITE: 6,
+        Target.WatchpointType.READ_WRITE: 7,
+        5: Target.WatchpointType.READ,
+        6: Target.WatchpointType.WRITE,
+        7: Target.WatchpointType.READ_WRITE,
+    }
 
     # Only sizes that are powers of 2 are supported
     # Breakpoint size = MASK**2
@@ -101,6 +101,9 @@ class DWT(CoreSightComponent):
         Reads the number of hardware watchpoints available on the core and makes sure that they
         are all disabled and ready for future use.
         """
+        if self.dwt_configured:
+            return
+
         # Make sure trace is enabled.
         demcr = self.ap.read_memory(DEMCR)
         if (demcr & DEMCR_TRCENA) == 0:
@@ -115,8 +118,9 @@ class DWT(CoreSightComponent):
             self.watchpoints.append(Watchpoint(comparatorAddress, self))
             self.ap.write_memory(comparatorAddress + self.DWT_FUNCTION_OFFSET, 0)
 
-        # Enable cycle counter.
-        self.ap.write32(self.address + self.DWT_CTRL, self.DWT_CTRL_CYCCNTENA_MASK)
+        # Enable cycle counter without changing other DWT configuration.
+        if (dwt_ctrl & self.DWT_CTRL_CYCCNTENA_MASK) == 0:
+            self.ap.write32(self.address + self.DWT_CTRL,dwt_ctrl | self.DWT_CTRL_CYCCNTENA_MASK)
         self.dwt_configured = True
 
     def find_watchpoint(self, addr, size, type):
@@ -205,20 +209,20 @@ class DWTv2(DWT):
 
     ## Map from watchpoint type to FUNCTIONn.MATCH field value.
     WATCH_TYPE_TO_FUNCT = {
-                            Target.WatchpointType.READ: 0b0110,
-                            Target.WatchpointType.WRITE: 0b0101,
-                            Target.WatchpointType.READ_WRITE: 0b0100,
-                            0b0110: Target.WatchpointType.READ,
-                            0b0101: Target.WatchpointType.WRITE,
-                            0b0100: Target.WatchpointType.READ_WRITE,
-                            }
+        Target.WatchpointType.READ: 0b0110,
+        Target.WatchpointType.WRITE: 0b0101,
+        Target.WatchpointType.READ_WRITE: 0b0100,
+        0b0110: Target.WatchpointType.READ,
+        0b0101: Target.WatchpointType.WRITE,
+        0b0100: Target.WatchpointType.READ_WRITE,
+    }
 
     ## Map from data access size to pre-shifted DATAVSIZE field value.
     DATAVSIZE_MAP = {
-                        1: (0 << 10),
-                        2: (1 << 10),
-                        4: (2 << 10),
-                    }
+        1: (0 << 10),
+        2: (1 << 10),
+        4: (2 << 10),
+    }
 
     def set_watchpoint(self, addr, size, type):
         """@brief Set a hardware watchpoint."""
@@ -254,6 +258,3 @@ class DWTv2(DWT):
 
         LOG.error('No more watchpoints are available, dropped watchpoint at 0x%08x', addr)
         return False
-
-
-

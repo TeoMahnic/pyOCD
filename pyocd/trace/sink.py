@@ -1,5 +1,5 @@
 # pyOCD debugger
-# Copyright (c) 2017-2019 Arm Limited
+# Copyright (c) 2017-2019,2026 Arm Limited
 # COpyright (c) 2021-2022 Chris Reed
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,10 +16,119 @@
 # limitations under the License.
 
 import collections.abc
-from typing import (TYPE_CHECKING, Iterable, List, Optional, Sequence, Union)
+import logging
+from pathlib import Path
+from typing import (Any, BinaryIO, TYPE_CHECKING, Iterable, List, Optional, Sequence, Union)
+
+from ..utility.server import StreamServer
 
 if TYPE_CHECKING:
     from .events import TraceEvent
+
+LOG = logging.getLogger(__name__)
+
+
+class TraceDataSink:
+    """Raw SWV trace output handler configured from session settings."""
+
+    def __init__(self, session: Any) -> None:
+        raw_file = session.options.get('swv_raw_file')
+        if raw_file:
+            self._sink = _TraceFileSink(Path(raw_file).expanduser())
+        elif session.options.get('swv_raw_enable'):
+            self._sink = _TraceServerSink(
+                session.options.get('swv_raw_port'),
+                session.options.get('serve_local_only'),
+                'SWV raw',
+            )
+        else:
+            raise ValueError('SWV raw output is not configured')
+
+    @property
+    def is_open(self) -> bool:
+        """Whether data can be written for the current capture."""
+        return self._sink.is_open
+
+    def start_capture(self, changed: bool) -> None:
+        """Start a trace capture, resetting output if the configuration changed."""
+        self._sink.start_capture(changed)
+
+    def write(self, data: bytes) -> int:
+        """Write raw trace data."""
+        return self._sink.write(data)
+
+    def flush(self) -> None:
+        """Flush data at the end of a capture."""
+        self._sink.flush()
+
+    def shutdown(self) -> None:
+        """Release the output destination."""
+        self._sink.shutdown()
+
+
+class _TraceFileSink:
+    """Raw trace data written to a file from capture through flush."""
+
+    def __init__(self, path: Path, create_parent: bool = False) -> None:
+        self._path = path
+        self._create_parent = create_parent
+        self._file: Optional[BinaryIO] = None
+        self._has_captured = False
+
+    @property
+    def is_open(self) -> bool:
+        return self._file is not None
+
+    def start_capture(self, changed: bool) -> None:
+        self.flush()
+        if self._create_parent:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self._path.open('wb' if changed or not self._has_captured else 'ab')
+        self._has_captured = True
+
+    def write(self, data: bytes) -> int:
+        if self._file is None:
+            return 0
+        self._file.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        if self._file is not None:
+            self._file.flush()
+            self._file.close()
+            self._file = None
+
+    def shutdown(self) -> None:
+        self.flush()
+
+
+class _TraceServerSink:
+    """Raw trace data delivered to a TCP client by a StreamServer."""
+
+    def __init__(self, port: int, serve_local_only: bool, name: str) -> None:
+        self._server = StreamServer(
+            port,
+            serve_local_only=serve_local_only,
+            name=name,
+            is_read_only=True,
+        )
+
+    @property
+    def is_open(self) -> bool:
+        return False
+
+    def start_capture(self, changed: bool) -> None:
+        pass
+
+    def write(self, data: bytes) -> int:
+        return self._server.write(data)
+
+    def flush(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        self._server.stop()
+
 
 class TraceEventSink:
     """@brief Abstract interface for a trace event sink."""

@@ -17,19 +17,17 @@
 # limitations under the License.
 
 import logging
-from pathlib import Path
 import threading
-from time import sleep
-from typing import (Optional, BinaryIO, TextIO, TYPE_CHECKING)
+from time import (monotonic, sleep)
+from typing import (Optional, TextIO, TYPE_CHECKING)
 
-from .sink import TraceEventSink
+from .sink import (TraceDataSink, TraceEventSink)
 from .events import (TraceEvent, TraceITMEvent)
 from .swo import SWOParser
 from ..coresight.itm import ITM
 from ..coresight.tpiu import TPIU
 from ..core import exceptions
 from ..probe.debug_probe import DebugProbe
-from ..utility.server import StreamServer
 from ..debug.sequences.delegates import TraceSetup
 
 if TYPE_CHECKING:
@@ -37,6 +35,9 @@ if TYPE_CHECKING:
     from ..utility.notification import Notification
 
 LOG = logging.getLogger(__name__)
+
+TRACE_FLUSH_IDLE_TIMEOUT = 0.001
+TRACE_FLUSH_MAX_TIMEOUT = 0.005
 
 class SWVEventSink(TraceEventSink):
     """@brief Trace event sink that converts ITM packets to a text stream."""
@@ -97,7 +98,7 @@ class SWVReader(threading.Thread):
         self._swo_clock = 0
         self._is_subscribed = False
         self._trace_data_lock = threading.Lock()
-        self._swv_raw_file: Optional[BinaryIO] = None
+        self._raw_output: Optional[TraceDataSink] = None
 
         target = self._session.target
         assert target
@@ -167,11 +168,12 @@ class SWVReader(threading.Thread):
         self._sink = SWVEventSink(console)
         self._parser.connect(self._sink)
 
+        if self._session.options.get('swv_raw_enable') and self._raw_output is None:
+            self._raw_output = TraceDataSink(self._session)
+
         self._session.subscribe(self._reset_handler, self._session.Event.TRACE_RESTART, self._session)
-        if self._session.ctrace_run is not None:
-            self._session.subscribe(self._trace_data_handler,
-                                    (self._session.Event.TRACE_DATA_FLUSH, self._session.Event.TRACE_DATA_CAPTURE),
-                                    self._session)
+        self._session.subscribe(self._trace_data_handler, self._session.Event.TRACE_DATA_FLUSH, self._session)
+        self._session.subscribe(self._trace_data_handler, self._session.Event.TRACE_DATA_CAPTURE, self._session)
         self._is_subscribed = True
 
         self.start()
@@ -187,17 +189,16 @@ class SWVReader(threading.Thread):
         """
         if self._is_subscribed:
             self._session.unsubscribe(self._reset_handler, self._session.Event.TRACE_RESTART)
-            if self._session.ctrace_run is not None:
-                self._session.unsubscribe(self._trace_data_handler,
-                                          (self._session.Event.TRACE_DATA_FLUSH,
-                                           self._session.Event.TRACE_DATA_CAPTURE))
+            self._session.unsubscribe(self._trace_data_handler, self._session.Event.TRACE_DATA_FLUSH)
+            self._session.unsubscribe(self._trace_data_handler, self._session.Event.TRACE_DATA_CAPTURE)
             self._is_subscribed = False
 
-        if not self.is_alive():
-            return
+        if self.is_alive():
+            self._shutdown_event.set()
+            self.join()
 
-        self._shutdown_event.set()
-        self.join()
+        if self._raw_output is not None:
+            self._raw_output.shutdown()
 
         if self._trace_setup == TraceSetup.LEGACY:
             # init() should never have started the SWV thread unless the target has ITM and TPIU.
@@ -214,24 +215,6 @@ class SWVReader(threading.Thread):
         """
         assert self._session.probe
 
-        swv_raw_server = None
-        if self._session.options.get('swv_raw_enable'):
-            raw_file_name = self._session.options.get('swv_raw_file')
-            if raw_file_name:
-                if self._session.ctrace_run is None:
-                    # swv_raw_file takes precedence over swv_raw_port.
-                    raw_file_path = Path(raw_file_name).expanduser()
-                    try:
-                        self._swv_raw_file = raw_file_path.open('wb')
-                    except OSError as err:
-                        LOG.warning("Failed to open SWV raw output file '%s': %s", raw_file_path, err)
-            else:
-                swv_raw_server = StreamServer(
-                                    self._session.options.get('swv_raw_port'),
-                                    serve_local_only=self._session.options.get('serve_local_only'),
-                                    name="SWV raw",
-                                    is_read_only=True)
-
         # Stop SWO first in case the probe already had it started. Ignore if this fails.
         try:
             self._session.probe.swo_stop()
@@ -243,24 +226,13 @@ class SWVReader(threading.Thread):
             with self._trace_data_lock:
                 data = self._session.probe.swo_read()
                 if data:
-                    if self._swv_raw_file:
-                        self._swv_raw_file.write(data)
-                    elif swv_raw_server:
-                        swv_raw_server.write(data)
+                    if self._raw_output is not None:
+                        self._raw_output.write(data)
                     self._parser.parse(data)
 
             sleep(0.001)
 
         self._session.probe.swo_stop()
-
-        with self._trace_data_lock:
-            if self._swv_raw_file:
-                self._swv_raw_file.flush()
-                self._swv_raw_file.close()
-                self._swv_raw_file = None
-
-        if swv_raw_server:
-            swv_raw_server.stop()
 
     def _reset_handler(self, notification: "Notification") -> None:
         """@brief Reconfigure SWV components after target trace support has restarted."""
@@ -273,30 +245,29 @@ class SWVReader(threading.Thread):
             LOG.warning("Failed to reinitialize SWV after reset", exc_info=self._session.log_tracebacks)
 
     def _trace_data_handler(self, notification: "Notification") -> None:
-        """Open or flush the raw trace output file."""
+        """Open or flush the raw trace output destination."""
         with self._trace_data_lock:
             if notification.event == self._session.Event.TRACE_DATA_CAPTURE:
-                raw_file_name = self._session.options.get('swv_raw_file')
-                if not raw_file_name:
+                if self._raw_output is None:
                     return
                 try:
-                    if self._swv_raw_file is not None:
-                        self._swv_raw_file.close()
-                    mode = 'wb' if notification.data else 'ab'
-                    self._swv_raw_file = Path(raw_file_name).expanduser().open(mode)
+                    self._raw_output.start_capture(bool(notification.data))
                 except OSError as err:
-                    self._swv_raw_file = None
-                    LOG.warning("Failed to open SWV raw output file '%s': %s", raw_file_name, err)
+                    LOG.warning("Failed to open SWV raw output: %s", err)
                 return
 
-            if self._swv_raw_file is None:
+            if self._raw_output is None:
                 return
 
-            raw_file = self._swv_raw_file
-            self._swv_raw_file = None
             try:
-                with raw_file:
-                    while data := self._session.probe.swo_read():
-                        raw_file.write(data)
+                idle_deadline = monotonic() + TRACE_FLUSH_IDLE_TIMEOUT
+                flush_deadline = monotonic() + TRACE_FLUSH_MAX_TIMEOUT
+                while monotonic() < min(idle_deadline, flush_deadline):
+                    data = self._session.probe.swo_read()
+                    if data:
+                        self._raw_output.write(data)
+                        idle_deadline = monotonic() + TRACE_FLUSH_IDLE_TIMEOUT
             except (OSError, exceptions.ProbeError) as err:
                 LOG.warning("Failed to update SWV raw output file: %s", err)
+            finally:
+                self._raw_output.flush()

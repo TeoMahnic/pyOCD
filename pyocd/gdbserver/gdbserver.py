@@ -425,11 +425,11 @@ class GDBServer(threading.Thread):
         # pylint: enable=invalid-name
 
     def trace_flush(self) -> None:
-        if self.session.options.get('enable_swv'):
+        if self.board.target.trace_enabled:
             self.board.target.trace_flush()
 
     def trace_capture(self) -> None:
-        if self.session.options.get('enable_swv'):
+        if self.board.target.trace_enabled:
             self.board.target.trace_capture()
 
     def _init_remote_commands(self):

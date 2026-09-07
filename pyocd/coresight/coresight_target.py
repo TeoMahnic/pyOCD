@@ -402,19 +402,20 @@ class CoreSightTarget(SoCTarget):
 
     def trace_capture(self) -> None:
         result = self.call_delegate('trace_capture', target=self, mode=0)
-        if not result and self.has_debug_sequence('TraceCapture', pname=self.selected_core_or_raise.node_name):
+        if not result and self.has_debug_sequence('TraceCapture'):
             assert self.debug_sequence_delegate
             if self.debug_sequence_delegate.trace_setup == TraceSetup.FULL:
-                self.debug_sequence_delegate.run_sequence('TraceCapture', pname=self.selected_core_or_raise.node_name)
-        ctrace_run = self.session.ctrace_run
-        if ctrace_run is not None:
-            changed = ctrace_run.apply(self)
-            self.session.notify(self.session.Event.TRACE_DATA_CAPTURE, self.session, changed)
+                self.debug_sequence_delegate.run_sequence('TraceCapture')
+
+        changed = False
+        if self.session.ctrace_run is not None:
+            changed = self.session.ctrace_run.apply(self)
+        self.session.notify(self.session.Event.TRACE_DATA_CAPTURE, self.session, changed)
 
     def trace_flush(self) -> None:
         result = self.call_delegate('trace_flush', target=self, mode=0)
-        if not result and self.has_debug_sequence('TraceFlush', pname=self.selected_core_or_raise.node_name):
+        if not result and self.has_debug_sequence('TraceFlush'):
             assert self.debug_sequence_delegate
             if self.debug_sequence_delegate.trace_setup == TraceSetup.FULL:
-                self.debug_sequence_delegate.run_sequence('TraceFlush', pname=self.selected_core_or_raise.node_name)
+                self.debug_sequence_delegate.run_sequence('TraceFlush')
         self.session.notify(self.session.Event.TRACE_DATA_FLUSH, self.session)

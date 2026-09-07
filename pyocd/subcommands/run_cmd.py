@@ -155,7 +155,7 @@ class RunSubcommand(SubcommandBase):
                     run_server.start()
 
                 # Trace Capture
-                if session.options.get('enable_swv'):
+                if session.board.target.trace_enabled:
                     session.board.target.trace_capture()
 
                 # Wait for all servers to complete or timelimit to expire
@@ -181,10 +181,10 @@ class RunSubcommand(SubcommandBase):
                 self.shutdown()
                 return 1
             finally:
+                if session.board.target.trace_enabled:
+                    session.board.target.trace_flush()
                 if swv_reader:
                     swv_reader.stop()
-                if session.options.get('enable_swv'):
-                    session.board.target.trace_flush()
 
             if timelimit_triggered:
                 return 0

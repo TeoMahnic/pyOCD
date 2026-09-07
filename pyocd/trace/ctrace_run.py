@@ -21,6 +21,7 @@ import hashlib
 import logging
 from pathlib import Path
 import re
+import threading
 from typing import (Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, TYPE_CHECKING, Union)
 
 import yaml
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from ..core.core_target import CoreTarget
     from ..core.session import Session
     from ..core.soc_target import SoCTarget
+    from ..utility.notification import Notification
 
 LOG = logging.getLogger(__name__)
 
@@ -119,29 +121,16 @@ class _CTraceRunParser:
         ),
     }
 
-    _TRACE_SOURCE_TYPES = {
-        'dwt',
-        'event',
-        'exception',
-        'global_ts',
-        'itm',
-        'overflow',
-        'pcsample',
-        'pmu',
-    }
-
     def __init__(self, yml_path: Union[str, Path]) -> None:
         """Create a ctrace-run processor for a YAML file."""
         if str(yml_path) == "":
             raise CTraceRunError("Cannot access *.ctrace-run.yml file: no path provided")
         self._path = Path(yml_path).expanduser().resolve()
         self._digest: Optional[bytes] = None
-        self._content_digest: Optional[bytes] = None
         self._data: Optional[_CTraceRunData] = None
 
     def load(self, force: bool = False) -> Optional[Tuple[bytes, _CTraceRunData]]:
         """Read and parse the file if its content has changed."""
-        self._content_digest = None
         try:
             yml_content = self._path.read_bytes()
         except FileNotFoundError:
@@ -150,11 +139,9 @@ class _CTraceRunParser:
             self._data = None
             return None
         except OSError as err:
-            raise CTraceRunError(
-                f"Cannot access *.ctrace-run.yml file '{self._path}': {err.strerror}") from err
+            raise CTraceRunError(f"Cannot access *.ctrace-run.yml file '{self._path}': {err.strerror}") from err
 
         digest = hashlib.sha256(yml_content).digest()
-        self._content_digest = digest
         if not force and digest == self._digest and self._data is not None:
             return digest, self._data
 
@@ -167,11 +154,9 @@ class _CTraceRunParser:
         try:
             yml_data = yaml.safe_load(yml_content.decode('utf-8'))
         except UnicodeDecodeError as err:
-            raise CTraceRunError(
-                f"Invalid UTF-8 in .ctrace-run.yml file '{self._path}': {err}") from err
+            raise CTraceRunError(f"Invalid UTF-8 in .ctrace-run.yml file '{self._path}': {err}") from err
         except yaml.YAMLError as err:
-            raise CTraceRunError(
-                f"Invalid YAML in .ctrace-run.yml file '{self._path}': {err}") from err
+            raise CTraceRunError(f"Invalid YAML in .ctrace-run.yml file '{self._path}': {err}") from err
 
         LOG.debug("Loading ctrace-run configuration from '%s'", self._path)
         if not isinstance(yml_data, dict) or 'ctrace-run' not in yml_data:
@@ -195,11 +180,7 @@ class _CTraceRunParser:
         LOG.debug("Read %d ctrace-run register writes", len(register_writes))
         return _CTraceRunData(tuple(references), tuple(register_writes))
 
-    def _parse_reference(
-            self,
-            ref: Any,
-            ref_index: int,
-            ) -> Tuple[Tuple[str, Optional[str]], List[_CTraceRegisterWrite]]:
+    def _parse_reference(self, ref: Any, ref_index: int) -> Tuple[Tuple[str, Optional[str]], List[_CTraceRegisterWrite]]:
         if not isinstance(ref, dict):
             raise CTraceRunError(f"Invalid ctrace-run reference at index {ref_index}: expected a mapping")
 
@@ -208,7 +189,7 @@ class _CTraceRunParser:
             raise CTraceRunError(f"Invalid ctrace-run reference at index {ref_index}: missing 'ctrace-ref'")
 
         trace_type = ref.get('type')
-        if not isinstance(trace_type, str) or trace_type not in self._TRACE_SOURCE_TYPES:
+        if not isinstance(trace_type, str) or not trace_type:
             raise CTraceRunError(f"Invalid trace source type '{trace_type}' in ctrace-run reference '{ref_name}'")
 
         pname = ref.get('pname')
@@ -221,14 +202,9 @@ class _CTraceRunParser:
         if not isinstance(regs, list):
             raise CTraceRunError(f"Invalid ctrace-run reference '{ref_name}': 'regs' must be a list")
 
-        return (ref_name, pname), self._parse_regs(regs, pname, ref_name)
+        return ((ref_name, pname), self._parse_regs(regs, pname, ref_name))
 
-    def _parse_regs(
-            self,
-            regs: Iterable[Mapping[str, Any]],
-            pname: Optional[str],
-            ref_name: str,
-            ) -> List[_CTraceRegisterWrite]:
+    def _parse_regs(self, regs: Iterable[Mapping[str, Any]], pname: Optional[str], ref_name: str) -> List[_CTraceRegisterWrite]:
         register_writes: List[_CTraceRegisterWrite] = []
 
         for reg in regs:
@@ -254,17 +230,14 @@ class _CTraceRunParser:
                     mask=self._parse_u32(reg['mask'], 'mask') if 'mask' in reg else None,
                     base_address=resolved_base,
                     pname=pname,
-                    ))
+                ))
             except (TypeError, ValueError) as err:
                 raise CTraceRunError(f"Invalid ctrace-run register entry '{reg_name}': {err}") from err
 
         return register_writes
 
     @classmethod
-    def _resolve_register(
-            cls,
-            reg_name: str,
-            ) -> Optional[Tuple[str, int, int]]:
+    def _resolve_register(cls, reg_name: str) -> Optional[Tuple[str, int, int]]:
         component = reg_name.partition('_')[0]
         base_address = cls._DEFAULT_BASE_ADDRESSES.get(component)
         if base_address is None:
@@ -301,14 +274,13 @@ class _CTraceRunParser:
 class CTraceRun:
     """Load and apply a CMSIS-Toolbox .ctrace-run.yml configuration."""
 
-    _UNLOCK_COMPONENTS = {'DWT', 'ITM'}
-
     def __init__(self, session: "Session") -> None:
+        self._lock = threading.RLock()
         self._last_applied_digest: Optional[bytes] = None
-        self._last_error: Optional[Tuple[Optional[bytes], str]] = None
+        self._last_error: Optional[str] = None
 
         cbuild_run = session.cbuild_run
-        if cbuild_run is None or cbuild_run.trace.get('mode', 'off') == 'off':
+        if cbuild_run is None or not cbuild_run.trace.enabled:
             raise CTraceRunError("Cannot create CTraceRun when cbuild-run trace is not enabled")
 
         cbuild_run_path = session.options.get('cbuild_run')
@@ -321,50 +293,63 @@ class CTraceRun:
         if not source_name.lower().endswith(suffix):
             raise CTraceRunError(f"Cannot derive ctrace-run name from cbuild-run file '{cbuild_run_path}'")
 
-        base_name = source_name[:-len(suffix)]
-        if not base_name:
-            raise CTraceRunError(f"Cannot derive ctrace-run name from cbuild-run file '{cbuild_run_path}'")
-
         project_path = cbuild_run.proj_path if cbuild_run.proj_path_name else None
         trace_root = (Path(project_path).expanduser().resolve() if project_path else source_path.parent)
-        self._parser = _CTraceRunParser(trace_root / '.trace' / f"{base_name}.ctrace-run.yml")
+        self._parser = _CTraceRunParser(trace_root / '.trace' / f"{cbuild_run.solution_set}.ctrace-run.yml")
+        session.subscribe(self._trace_restart_handler, session.Event.TRACE_RESTART, session)
 
-    def apply(self, target: "SoCTarget", force: bool = False) -> bool:
-        """Apply the file if it changed, returning whether it was applied."""
-        if force:
+    def apply(self, target: "SoCTarget") -> bool:
+        """Apply changed configuration and return whether the file changed."""
+        with self._lock:
+            try:
+                loaded = self._parser.load()
+                if loaded is None:
+                    self._last_applied_digest = None
+                    self._last_error = None
+                    return False
+
+                digest, data = loaded
+                if digest == self._last_applied_digest:
+                    return False
+
+                self._apply_to_target(target, data)
+                self._last_applied_digest = digest
+                self._last_error = None
+                return True
+            except exceptions.Error as err:
+                self._report_error(err)
+                return False
+
+    def reload(self) -> bool:
+        """Reload and validate the file without applying it to the target."""
+        with self._lock:
+            try:
+                reloaded = self._parser.load(force=True)
+                if reloaded is None:
+                    return False
+                self.invalidate()
+            except exceptions.Error as err:
+                self._report_error(err)
+                return False
+            return True
+
+    def invalidate(self) -> None:
+        """Invalidate the last applied configuration, so that it will be reapplied on the next call to apply()."""
+        with self._lock:
             self._last_applied_digest = None
             self._last_error = None
 
-        try:
-            loaded = self._parser.load(force)
-            if loaded is None:
-                self._last_applied_digest = None
-                self._last_error = None
-                return False
-
-            digest, data = loaded
-            if digest == self._last_applied_digest:
-                return False
-
-            self._apply_to_target(target, data)
-            self._last_applied_digest = digest
-            self._last_error = None
-            return True
-        except exceptions.Error as err:
-            self._report_error(err)
-            return False
-
-    def reload(self, target: "SoCTarget") -> bool:
-        """Reload and reapply the file even if it has not changed."""
-        return self.apply(target, force=True)
+    def _trace_restart_handler(self, notification: "Notification") -> None:
+        """Invalidate the applied configuration after target trace support restarts."""
+        self.invalidate()
 
     def _report_error(self, error: exceptions.Error) -> None:
-        error_key = (self._parser._content_digest, str(error))
-        if error_key == self._last_error:
+        error_message = str(error)
+        if error_message == self._last_error:
             LOG.debug("Failed to apply ctrace-run configuration: %s", error)
         else:
             LOG.error("Failed to apply ctrace-run configuration: %s", error)
-            self._last_error = error_key
+            self._last_error = error_message
 
     def _apply_to_target(self, target: "SoCTarget", data: _CTraceRunData) -> None:
         access_targets = self._resolve_access_targets(target, data.references)
@@ -383,7 +368,7 @@ class CTraceRun:
                 self._enable_trace_access(access_target)
                 enabled_targets.add(target_key)
 
-            if reg.component in self._UNLOCK_COMPONENTS:
+            if reg.component in ('DWT', 'ITM'):
                 component_key = (target_key, reg.base_address)
                 if component_key not in unlocked_components:
                     self._unlock_component(access_target, reg.component, reg.base_address)
@@ -391,11 +376,7 @@ class CTraceRun:
 
             self._write_register(access_target, reg)
 
-    def _resolve_access_targets(
-            self,
-            target: "SoCTarget",
-            references: Iterable[Tuple[str, Optional[str]]],
-            ) -> Dict[Optional[str], "CoreTarget"]:
+    def _resolve_access_targets(self, target: "SoCTarget", references: Iterable[Tuple[str, Optional[str]]]) -> Dict[Optional[str], "CoreTarget"]:
         cores_by_pname = {core.node_name: core for core in target.cores.values()}
         access_targets: Dict[Optional[str], "CoreTarget"] = {}
 
@@ -416,7 +397,8 @@ class CTraceRun:
                 current = target.read32(reg.address)
                 value = (current & ~reg.mask) | (reg.value & reg.mask)
             target.write32(reg.address, value)
-            LOG.debug("ctrace-run wrote %s = 0x%08x at 0x%08x%s", reg.register, value, reg.address, f" for processor '{reg.pname}'" if reg.pname else "",)
+            LOG.debug("ctrace-run wrote %s = 0x%08x at 0x%08x%s",
+                      reg.register, value, reg.address, f" for processor '{reg.pname}'" if reg.pname else "",)
         except exceptions.Error as err:
             raise CTraceRunError(f"Failed to write ctrace-run register {reg.register} at 0x{reg.address:08x}: {err}") from err
 
@@ -430,11 +412,7 @@ class CTraceRun:
             raise CTraceRunError(f"Failed to enable trace access for ctrace-run: {err}") from err
 
     @staticmethod
-    def _unlock_component(
-            target: "CoreTarget",
-            component: str,
-            base_address: int,
-            ) -> None:
+    def _unlock_component(target: "CoreTarget", component: str, base_address: int) -> None:
         try:
             target.write32(base_address + CORESIGHT_LAR_OFFSET, CORESIGHT_LAR_KEY)
         except exceptions.Error as err:

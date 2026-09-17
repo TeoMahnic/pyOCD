@@ -29,7 +29,7 @@ from ..core.target import Target
 from ..core.target_delegate import DelegateHavingMixIn
 from ..probe.debug_probe import DebugProbe
 from ..probe.swj import SWJSequenceSender
-from .ap import APSEL_APBANKSEL
+from .ap import APSEL_APBANKSEL, APCSWCacheManager
 from ..utility.sequencer import CallSequence
 from ..utility.timeout import Timeout
 
@@ -316,6 +316,7 @@ class DebugPort(DelegateHavingMixIn):
         self.aps: Dict[APAddressBase, AccessPort] = {}
         self._access_number: int = 0
         self._cached_dp_select: Optional[int] = None
+        self._ap_cache_cb = APCSWCacheManager()
         self._protocol: Optional[DebugProbe.Protocol] = None
         self._probe_managed_ap_select: bool = False
         self._probe_managed_dpbanksel: bool = False
@@ -877,6 +878,7 @@ class DebugPort(DelegateHavingMixIn):
             did_lock = self._select_ap(addr)
             TRACE.debug("write_ap:%06d (addr=0x%08x) = 0x%08x", num, addr, data)
             self.probe.write_ap(addr, data)
+            self._ap_cache_cb(addr, data)
         except exceptions.TargetError as error:
             self._handle_error(error, num)
             raise
@@ -922,6 +924,7 @@ class DebugPort(DelegateHavingMixIn):
         def read_ap_cb() -> int:
             try:
                 result = result_cb()
+                self._ap_cache_cb(addr, result)
                 TRACE.debug("read_ap:%06d %s(addr=0x%08x) -> 0x%08x", num, "" if now else "...", addr, result)
                 return result
             except exceptions.TargetError as error:

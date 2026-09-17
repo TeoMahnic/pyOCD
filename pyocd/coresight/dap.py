@@ -29,7 +29,6 @@ from ..core.target import Target
 from ..core.target_delegate import DelegateHavingMixIn
 from ..probe.debug_probe import DebugProbe
 from ..probe.swj import SWJSequenceSender
-from .ap import APSEL_APBANKSEL
 from ..utility.sequencer import CallSequence
 from ..utility.timeout import Timeout
 
@@ -86,6 +85,7 @@ CTRLSTAT_WDATAERR = 0x00000080
 
 # DP SELECT register fields.
 SELECT_DPBANKSEL_MASK = 0x0000000f
+SELECT_APSEL_APBANKSEL_MASK = 0xff0000f0
 SELECT_APADDR_MASK = 0xfffffff0
 
 DPIDR_REVISION_MASK = 0xf0000000
@@ -119,6 +119,19 @@ class ADIVersion(Enum):
     """@brief Supported versions of the Arm Debug Interface."""
     ADIv5 = 5
     ADIv6 = 6
+
+class _APAccessCallbackManager:
+    """@brief Dispatches AP register accesses to registered callbacks."""
+
+    def __init__(self) -> None:
+        self._callbacks: Dict[int, Callable[[int], None]] = {}
+
+    def register(self, addr: int, callback: Callable[[int], None]) -> None:
+        self._callbacks[addr] = callback
+
+    def __call__(self, addr: int, value: int) -> None:
+        if (callback := self._callbacks.get(addr)) is not None:
+            callback(value)
 
 class ProbeConnector:
     """@brief Configures the debug probe for a given wire protocol.
@@ -316,6 +329,7 @@ class DebugPort(DelegateHavingMixIn):
         self.aps: Dict[APAddressBase, AccessPort] = {}
         self._access_number: int = 0
         self._cached_dp_select: Optional[int] = None
+        self._ap_access_callbacks = _APAccessCallbackManager()
         self._protocol: Optional[DebugProbe.Protocol] = None
         self._probe_managed_ap_select: bool = False
         self._probe_managed_dpbanksel: bool = False
@@ -602,6 +616,10 @@ class DebugPort(DelegateHavingMixIn):
         """@brief Invalidate cached DP registers."""
         self._cached_dp_select = None
 
+    def _register_ap_access_callback(self, addr: int, callback: Callable[[int], None]) -> None:
+        """@brief Register a callback for accesses to an AP register address."""
+        self._ap_access_callbacks.register(addr, callback)
+
     def _reset_did_occur(self, notification: Notification) -> None:
         """@brief Handles reset notifications to invalidate register cache.
 
@@ -860,7 +878,7 @@ class DebugPort(DelegateHavingMixIn):
         # Write DP SELECT to select the probe.
         self.lock()
         if self.adi_version == ADIVersion.ADIv5:
-            self._write_dp_select(APSEL_APBANKSEL, addr & APSEL_APBANKSEL)
+            self._write_dp_select(SELECT_APSEL_APBANKSEL_MASK, addr & SELECT_APSEL_APBANKSEL_MASK)
         elif self.adi_version == ADIVersion.ADIv6:
             self._write_dp_select(SELECT_APADDR_MASK, addr & SELECT_APADDR_MASK)
         else:
@@ -877,6 +895,7 @@ class DebugPort(DelegateHavingMixIn):
             did_lock = self._select_ap(addr)
             TRACE.debug("write_ap:%06d (addr=0x%08x) = 0x%08x", num, addr, data)
             self.probe.write_ap(addr, data)
+            self._ap_access_callbacks(addr, data)
         except exceptions.TargetError as error:
             self._handle_error(error, num)
             raise
@@ -922,6 +941,7 @@ class DebugPort(DelegateHavingMixIn):
         def read_ap_cb() -> int:
             try:
                 result = result_cb()
+                self._ap_access_callbacks(addr, result)
                 TRACE.debug("read_ap:%06d %s(addr=0x%08x) -> 0x%08x", num, "" if now else "...", addr, result)
                 return result
             except exceptions.TargetError as error:

@@ -419,8 +419,6 @@ class CoreSightTarget(SoCTarget):
 
     def trace_capture(self, core: Optional["CoreTarget"] = None) -> None:
         pname = core.node_name if core else None
-        ctrace_run = self.session.ctrace_run
-        changed = False
 
         result = self.call_delegate('trace_capture', target=self, mode=0)
         if not result and self.has_debug_sequence('TraceCapture', pname=pname):
@@ -428,10 +426,15 @@ class CoreSightTarget(SoCTarget):
             if self.debug_sequence_delegate.trace_setup == TraceSetup.FULL:
                 self.debug_sequence_delegate.run_sequence('TraceCapture', pname=pname)
 
-        if ctrace_run is not None:
-            changed = ctrace_run.apply(self)
-
-        self.session.notify(self.session.Event.TRACE_DATA_CAPTURE, self.session, changed)
+        if (ctrace_run := self.session.ctrace_run) is not None:
+            with ctrace_run.update():
+                changed = ctrace_run.check_for_changes()
+                ctrace_run.apply_disable(self)
+                self.session.notify(self.session.Event.TRACE_DATA_CAPTURE, self.session, changed)
+                ctrace_run.apply_refs(self)
+                ctrace_run.itm_force_sync(core if core is not None else self.primary_core)
+        else:
+            self.session.notify(self.session.Event.TRACE_DATA_CAPTURE, self.session, False)
 
     def trace_flush(self, core: Optional["CoreTarget"] = None) -> None:
         pname = core.node_name if core else None

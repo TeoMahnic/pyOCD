@@ -1,6 +1,6 @@
 # pyOCD debugger
 # Copyright (c) 2021-2022 Chris Reed
-# Copyright (c) 2025 Arm Limited
+# Copyright (c) 2025-2026 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -86,7 +86,7 @@ class ResetSubcommand(SubcommandBase):
                             connect_mode=self._args.connect_mode,
                             resume_on_disconnect=not self._args.halt,
                             reset_type=self._args.reset_type,
-                            command=self._args.cmd,
+                            command=self.NAMES[0],
                             options=convert_session_options(self._args.options),
                             option_defaults=self._modified_option_defaults(),
                             )

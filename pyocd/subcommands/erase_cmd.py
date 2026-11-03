@@ -1,6 +1,6 @@
 # pyOCD debugger
 # Copyright (c) 2021 Chris Reed
-# Copyright (c) 2025 Arm Limited
+# Copyright (c) 2025-2026 Arm Limited
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -87,7 +87,7 @@ class EraseSubcommand(SubcommandBase):
                             frequency=self._args.frequency,
                             blocking=(not self._args.no_wait),
                             connect_mode=self._args.connect_mode,
-                            command=self._args.cmd,
+                            command=self.NAMES[0],
                             options=convert_session_options(self._args.options),
                             option_defaults=self._modified_option_defaults(),
                             )

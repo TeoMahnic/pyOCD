@@ -53,6 +53,21 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
+# Logger patterns in these defaults are expanded by Session before configuring logging.
+CBUILD_RUN_COMMAND_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    'gdbserver': {
+        'logging': {
+            'version': 1,
+            'incremental': True,
+            'root': {'level': logging.WARNING},
+            'loggers': {
+                '*.cbuild_run': {'level': logging.INFO},
+                '*server': {'level': logging.INFO},
+            },
+        },
+    },
+}
+
 class CbuildRunError(exceptions.Error):
     """Custom exception for errors encountered during processing of .cbuild-run.yml"""
     pass

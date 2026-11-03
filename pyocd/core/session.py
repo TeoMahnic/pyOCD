@@ -18,7 +18,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import Enum
+import fnmatch
 import logging
 import logging.config
 import yaml
@@ -35,7 +38,7 @@ from . import exceptions
 from .options_manager import OptionsManager
 from .target import Target
 from ..utility.notification import Notifier
-from ..target.csolution.cbuild_run import CbuildRun
+from ..target.csolution.cbuild_run import CbuildRun, CBUILD_RUN_COMMAND_DEFAULTS
 from ..target.csolution.ctrace_run import CTraceRun
 
 if TYPE_CHECKING:
@@ -66,6 +69,45 @@ _USER_SCRIPT_NAMES = [
         ".pyocd_user.py",
     ]
 
+@dataclass
+class LoggingOptions:
+    """Structured overrides carried by the logging option, independent of argument parsing."""
+
+    default_level: int
+    quiet: int = 0
+    verbose: int = 0
+    loggers: Mapping[str, int] = field(default_factory=dict)
+    config: Optional[Union[str, Dict[str, Any]]] = None
+
+
+def _build_logging_config(profile: Mapping[str, Any], logging_options: Optional[LoggingOptions] = None) -> Dict[str, Any]:
+    """@brief Expand profile logger patterns and apply explicit logging overrides."""
+    if logging_options is None:
+        config = dict(profile)
+    else:
+        default_level = logging_options.default_level
+        if logging_options.verbose:
+            default_level = profile.get('root', {}).get('level', default_level)
+        level = max(1, default_level + 10 * (logging_options.quiet - logging_options.verbose))
+        config = {
+            'version': 1,
+            'incremental': True,
+            'root': {'level': level},
+            'loggers': {pattern: {'level': level} for pattern in profile.get('loggers', {})}
+                if logging_options.quiet or logging_options.verbose else {},
+        }
+
+    logger_names = list(logging.root.manager.loggerDict)
+    config['loggers'] = {
+        name: settings.copy()
+        for pattern, settings in config.get('loggers', {}).items()
+        for name in fnmatch.filter(logger_names, pattern)
+    }
+    if logging_options is not None:
+        config['loggers'].update({name: {'level': level} for name, level in logging_options.loggers.items()})
+    return config
+
+
 class Session(Notifier):
     """@brief Top-level object for a debug session.
 
@@ -80,9 +122,11 @@ class Session(Notifier):
 
     1. Keyword arguments to constructor.
     2. _options_ parameter to constructor.
-    3. Probe-specific options from a config file.
-    4. General options from a config file.
-    5. _option_defaults_ parameter to constructor.
+    3. Options from cbuild-run.
+    4. Probe-specific options from a config file.
+    5. General options from a config file.
+    6. _option_defaults_ parameter to constructor.
+    7. Option definition defaults.
 
     The session also tracks several other objects:
     - @ref pyocd.gdbserver.gdbserver.GDBServer "GDBServer" instances created for any cores.
@@ -199,9 +243,27 @@ class Session(Notifier):
         if probe is not None:
             probe.session = self
 
-        # Update options.
-        self._options.add_front(kwargs)
-        self._options.add_back(options)
+        # Keep CLI overrides separate until the active cbuild-run profile is known.
+        logging_value = kwargs.get('logging')
+        if logging_value is None and options is not None:
+            logging_value = options.get('logging')
+        logging_options = logging_value if isinstance(logging_value, LoggingOptions) else None
+        for layer in (kwargs, options):
+            if layer is not None and isinstance(layer.get('logging'), LoggingOptions):
+                layer = dict(layer)
+                layer['logging'] = layer['logging'].config
+            self._options.add_back(layer)
+
+        # Apply cbuild-run logging defaults before any session or cbuild-run parsing messages.
+        if self.options.is_set('cbuild_run') and not self.options.is_set('target_override'):
+            profile = CBUILD_RUN_COMMAND_DEFAULTS.get(command or '', {}).get('logging')
+            if profile is not None:
+                logging_config = _build_logging_config(deepcopy(profile), logging_options)
+                if logging_options is None:
+                    self._options.add_back({'logging': logging_config})
+                else:
+                    self._options.set('logging', logging_config)
+                logging.config.dictConfig(logging_config)
 
         # Init project directory.
         if self.options.get('project_dir') is None:
@@ -365,7 +427,7 @@ class Session(Notifier):
         return filePath
 
     def _configure_logging(self) -> None:
-        """@brief Load a logging config dict or file."""
+        """@brief Load the effective logging configuration from session options."""
         # Get logging config that could have been loaded from the config file.
         config_value = self.options.get('logging')
 

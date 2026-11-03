@@ -92,7 +92,7 @@ class InfoSubcommand(SubcommandBase):
                             frequency=self._args.frequency,
                             blocking=False,
                             connect_mode=self._args.connect_mode,
-                            command=self._args.cmd,
+                            command=self.NAMES[0],
                             options=convert_session_options(self._args.options),
                             option_defaults=self._modified_option_defaults(),
                             )

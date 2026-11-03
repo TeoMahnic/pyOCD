@@ -16,7 +16,7 @@
 # limitations under the License.
 
 import logging
-from typing import (Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, cast)
+from typing import (Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, cast)
 
 import yaml
 
@@ -262,8 +262,10 @@ def convert_one_session_option(name: str, value: Optional[str]) -> Tuple[str, An
 
     return name, result
 
-def convert_session_options(option_list: Iterable[str]) -> Dict[str, Any]:
-    """@brief Convert a list of session option settings to a dictionary.
+def convert_session_options(option_list: Optional[Union[Iterable[str], Mapping[str, Any]]]) -> Dict[str, Any]:
+    """@brief Convert session option settings to a dictionary.
+
+    Already-converted mappings are returned as a shallow copy without parsing their values again.
 
     Each entry in ``option_list`` is a string in one of the following formats:
 
@@ -275,6 +277,9 @@ def convert_session_options(option_list: Iterable[str]) -> Dict[str, Any]:
     as YAML, which accepts both YAML flow style and standard JSON.  This allows
     hex integers (``0x...``), unquoted strings, and booleans without quoting.
     """
+    if isinstance(option_list, Mapping):
+        return dict(option_list)
+
     options = {}
     if option_list is not None:
         for o in option_list:

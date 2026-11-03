@@ -24,14 +24,15 @@ import logging
 import argparse
 import colorama
 import fnmatch
-from typing import (Any, Optional, Sequence)
+from typing import (Any, Dict, Optional, Sequence)
 
 from . import __version__
-from .core.session import Session
+from .core.session import Session, LoggingOptions
 from .core import exceptions
 from .probe.pydapaccess import DAPAccess
 from .core import options
 from .utility.color_log import build_color_logger
+from .utility.cmdline import convert_session_options
 from .subcommands.base import SubcommandBase
 from .subcommands.commander_cmd import CommanderSubcommand
 from .subcommands.erase_cmd import EraseSubcommand
@@ -100,7 +101,7 @@ class PyOCDTool(SubcommandBase):
         return parser
 
     def _setup_logging(self) -> None:
-        """@brief Configure the logging module.
+        """@brief Configure console and startup logging, and collect final overrides for Session.
 
         The color log formatter is set up, based on the --color argument and `PYOCD_COLOR` env variable. The --color
         argument overrides `PYOCD_COLOR`.
@@ -114,10 +115,12 @@ class PyOCDTool(SubcommandBase):
                         or os.environ.get('PYOCD_COLOR', 'auto'))
 
         # Compute global log level.
-        level = max(1, self._args.command_class.DEFAULT_LOG_LEVEL + self._get_log_level_delta())
+        default_level = self._args.command_class.DEFAULT_LOG_LEVEL
+        level = max(1, default_level + self._get_log_level_delta())
 
         # Build the logger to output to stderr (the default).
         build_color_logger(level=level, color_setting=color_setting)
+        logger_levels: Dict[str, int] = {}
 
         # Handle settings for individual loggers from --log-level arguments.
         for logger_setting in self._args.log_level:
@@ -128,6 +131,7 @@ class PyOCDTool(SubcommandBase):
                     matching_loggers = fnmatch.filter(logging.root.manager.loggerDict.keys(), logger_pattern.strip()) # type:ignore
                     LOG.debug('setting log level %s for %s', level_name, matching_loggers)
                     for logger in matching_loggers:
+                        logger_levels[logger] = level
                         log = logging.getLogger(logger)
                         log.setLevel(level)
                         log.disabled = False
@@ -136,6 +140,12 @@ class PyOCDTool(SubcommandBase):
             except AttributeError:
                 LOG.warning("Failed to set logger levels; logging module may have changed.")
                 break
+
+        if hasattr(self._args, 'options') and (self._args.quiet or self._args.verbose or self._args.log_level):
+            self._args.options = convert_session_options(self._args.options)
+            self._args.options['logging'] = LoggingOptions(default_level=default_level,
+                quiet=self._args.quiet, verbose=self._args.verbose, loggers=logger_levels,
+                config=self._args.options.get('logging'))
 
     def invoke(self) -> int:
         """@brief Show help when pyocd is run with no subcommand."""

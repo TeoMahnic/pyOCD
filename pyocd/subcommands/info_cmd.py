@@ -37,6 +37,15 @@ class _InfoProbeProxy(SharedDebugProbeProxy):
         self._probe_info()
         return self.probe.create_associated_board()
 
+    @staticmethod
+    def _format_frequency(frequency: float) -> str:
+        """@brief Format a frequency in Hz with an appropriate unit."""
+        if frequency >= 1000000:
+            return f"{frequency / 1000000:g}MHz"
+        elif frequency >= 1000:
+            return f"{frequency / 1000:g}kHz"
+        return f"{frequency:g}Hz"
+
     def _probe_info(self) -> None:
         """@brief Display probe and port information before target selection."""
         assert self.session
@@ -55,7 +64,13 @@ class _InfoProbeProxy(SharedDebugProbeProxy):
         ProbeConnector(cast(DebugProbe, self)).connect()
         protocol = self.wire_protocol
         if protocol is not None:
-            print(f"Debug Port: {protocol.name} [{InfoSubcommand._format_frequency(frequency)}]")
+            print(f"Debug Port: {protocol.name} [{self._format_frequency(frequency)}]")
+
+        if self.session.options.get('enable_swv'):
+            swo_frequency = self.session.options.get('swv_clock')
+            print(f"Trace Port: SWO (UART) [{self._format_frequency(swo_frequency)}]")
+        else:
+            print("Trace Port: disabled")
 
     def release(self) -> None:
         """@brief Disconnect and close the probe after session cleanup."""
@@ -79,15 +94,6 @@ class InfoSubcommand(SubcommandBase):
         """@brief Add this subcommand to the subparsers object."""
         info_parser = argparse.ArgumentParser(description='info', add_help=False)
         return [cls.CommonOptions.COMMON, cls.CommonOptions.CONNECT, info_parser]
-
-    @staticmethod
-    def _format_frequency(frequency: float) -> str:
-        """@brief Format a frequency in Hz with an appropriate unit."""
-        if frequency >= 1000000:
-            return f"{frequency / 1000000:g}MHz"
-        elif frequency >= 1000:
-            return f"{frequency / 1000:g}kHz"
-        return f"{frequency:g}Hz"
 
     @staticmethod
     def _print_core(core: CoreTarget, show_core_number: bool) -> None:
@@ -147,12 +153,6 @@ class InfoSubcommand(SubcommandBase):
             # which provides the target and core information reported below.
             session.open()
             assert session.target
-
-            if session.options.get('enable_swv'):
-                swo_frequency = session.options.get('swv_clock')
-                print(f"Trace Port: SWO (UART) [{self._format_frequency(swo_frequency)}]")
-            else:
-                print("Trace Port: disabled")
 
             cores = session.target.cores
             if not cores:

@@ -347,7 +347,6 @@ class CbuildRun:
         if self._device is None:
             device = self._data.get('device', '')
             self._device = device.split('::')[1] if '::' in device else device
-            LOG.info("Target device: %s", self._device)
         return self._device
 
     @property
@@ -600,7 +599,6 @@ class CbuildRun:
         """@brief Primary core number from debugger settings."""
         start_pname = self.debugger.get('start-pname')
         if start_pname is not None:
-            LOG.info("start-pname: %s", start_pname)
             return next((i for i, proc_info in enumerate(self.sorted_processors)
                         if proc_info.name == start_pname), None)
         return None
@@ -812,6 +810,10 @@ class CbuildRun:
             target = normalise_target_type_name(self.target)
         elif target != normalise_target_type_name(self.target):
             return
+
+        LOG.info("Target device: %s", self.target)
+        if (primary_core := self.primary_core) is not None:
+            LOG.info("start-pname: %s", self.sorted_processors[primary_core].name)
 
         # Check if we're overwriting an existing target.
         if target in TARGET:

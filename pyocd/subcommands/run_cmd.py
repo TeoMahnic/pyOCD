@@ -43,7 +43,6 @@ class RunSubcommand(SubcommandBase):
 
     NAMES = ['run']
     HELP = "Load and run the target."
-    DEFAULT_LOG_LEVEL = logging.WARNING
 
     @classmethod
     def get_args(cls) -> List[argparse.ArgumentParser]:
@@ -68,6 +67,7 @@ class RunSubcommand(SubcommandBase):
         self.shared_shutdown = threading.Event()
 
         self._run_servers = []
+
 
         try:
             # Create session
@@ -95,11 +95,20 @@ class RunSubcommand(SubcommandBase):
             LOG.error("Exception occurred while creating session: %s", e)
             return 1
 
+        # Check if quiet initialization should be applied
+        quiet_init = (not any((self._args.verbose, self._args.quiet, self._args.log_level))
+                      and session.options.get('logging') is None
+                      and session.cbuild_run is not None)
+        # Apply quiet initialization
+        if quiet_init:
+            logging.getLogger().setLevel(logging.WARNING)
+            logging.getLogger(type(session.cbuild_run).__module__).setLevel(logging.INFO)
+
         with session:
-            # Increase log level to INFO if it is still at the default WARNING level
-            root_logger = logging.getLogger()
-            if root_logger.level == logging.WARNING:
-                root_logger.setLevel(logging.INFO)
+            # Restore default log level after quiet initialization
+            if quiet_init:
+                logging.getLogger(type(session.cbuild_run).__module__).setLevel(logging.NOTSET)
+                logging.getLogger().setLevel(self.DEFAULT_LOG_LEVEL)
 
             # TODO: load support
 

@@ -127,7 +127,8 @@ class Board(GraphNode):
                 "for how to install additional target support.") from exc
 
         # Tell the user what target type is selected.
-        LOG.info("Target type is %s", self._target_type)
+        if not cbuild_run:
+            LOG.info("Target type is %s", self._target_type)
 
         self._name = board_info.name if (board_info and board_info.name) \
                 else f"Generic {self.target_type} board"
